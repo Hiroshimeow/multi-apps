@@ -13,6 +13,7 @@ import atexit
 import faulthandler
 import logging
 import threading
+import time
 import traceback
 from PyQt6.QtWidgets import (
     QApplication,
