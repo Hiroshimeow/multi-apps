@@ -10,6 +10,10 @@ import hashlib
 import ctypes
 import ctypes.wintypes
 import atexit
+import faulthandler
+import logging
+import threading
+import traceback
 from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
@@ -68,6 +72,9 @@ from backup_manager import (
 # --- Cấu hình ---
 DATA_FILE = os.path.join(os.path.dirname(__file__), "data.json")
 IMAGE_DIR = os.path.join(os.path.dirname(__file__), "images")
+LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
+DEBUG_LOG_FILE = os.path.join(LOG_DIR, "Advance Clipboard.debug.log")
+FAULT_LOG_FILE = os.path.join(LOG_DIR, "Advance Clipboard.fault.log")
 
 # Pagination config
 PAGE_SIZE_HISTORY = 20
@@ -79,6 +86,43 @@ UI_EDGE_MARGIN = 150  # Minimum distance from screen edges
 # Ensure image directory exists
 if not os.path.exists(IMAGE_DIR):
     os.makedirs(IMAGE_DIR)
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
+
+
+logger = logging.getLogger("advance_clipboard")
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    file_handler = logging.FileHandler(DEBUG_LOG_FILE, encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    )
+    logger.addHandler(file_handler)
+    logger.propagate = False
+
+
+_fault_log_handle = open(FAULT_LOG_FILE, "a", encoding="utf-8")
+faulthandler.enable(_fault_log_handle, all_threads=True)
+
+
+def _log_unhandled_exception(exc_type, exc_value, exc_tb):
+    logger.critical(
+        "Unhandled exception:\n%s",
+        "".join(traceback.format_exception(exc_type, exc_value, exc_tb)),
+    )
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
+def _log_thread_exception(args):
+    logger.critical(
+        "Unhandled thread exception in %s:\n%s",
+        getattr(args.thread, "name", "unknown-thread"),
+        "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)),
+    )
+
+
+sys.excepthook = _log_unhandled_exception
+threading.excepthook = _log_thread_exception
 
 
 # --- Smooth scrolling list widget ---
@@ -618,6 +662,7 @@ class ClientApp(QWidget):
 
     def _cleanup_on_exit(self):
         """Cleanup when app exits."""
+        logger.info("cleanup_on_exit storage_need_backup=%s", self.storage.need_backup)
         # Stop Win32 monitor thread
         if hasattr(self, "win32_monitor"):
             self.win32_monitor.stop()
@@ -949,17 +994,36 @@ class ClientApp(QWidget):
 
     def on_item_clicked(self, item):
         if self.input_locked:
+            logger.info("item_click_ignored reason=input_locked")
             return
         data = item.data(Qt.ItemDataRole.UserRole)
         if data and isinstance(data, dict) and "content" in data:
+            logger.info(
+                "item_clicked clip_id=%s type=%s preview=%r",
+                data.get("id"),
+                data.get("type"),
+                str(data.get("content", ""))[:80],
+            )
             self.handle_paste(data)
 
     def handle_paste(self, data):
         if self._paste_in_progress or not data or "content" not in data:
+            logger.info(
+                "handle_paste_skipped in_progress=%s has_data=%s has_content=%s",
+                self._paste_in_progress,
+                bool(data),
+                bool(data and "content" in data),
+            )
             return
 
         self._paste_in_progress = True
         self.input_locked = True
+        logger.info(
+            "handle_paste_start clip_id=%s type=%s target_hwnd=%s",
+            data.get("id"),
+            data.get("type"),
+            self.last_active_window_handle,
+        )
 
         self.hide()
         QTimer.singleShot(0, self._reset_ui_after_paste_request)
@@ -967,52 +1031,85 @@ class ClientApp(QWidget):
 
     def _prepare_clipboard_and_paste(self, data, attempt_index):
         retry_delays = (0, 30, 70, 140)
+        logger.info(
+            "prepare_clipboard attempt=%s clip_id=%s type=%s",
+            attempt_index,
+            data.get("id"),
+            data.get("type"),
+        )
 
         if not self._write_clipboard_payload(data):
             next_attempt = attempt_index + 1
+            logger.warning(
+                "prepare_clipboard_failed attempt=%s clip_id=%s next_attempt=%s",
+                attempt_index,
+                data.get("id"),
+                next_attempt,
+            )
             if next_attempt < len(retry_delays):
                 QTimer.singleShot(
                     retry_delays[next_attempt],
                     lambda: self._prepare_clipboard_and_paste(data, next_attempt),
                 )
             else:
+                logger.error(
+                    "prepare_clipboard_exhausted clip_id=%s type=%s",
+                    data.get("id"),
+                    data.get("type"),
+                )
                 self._finish_paste_attempt(clear_guard=True)
             return
 
         self._set_pending_clipboard_guard(data)
+        logger.info("prepare_clipboard_success clip_id=%s", data.get("id"))
         QTimer.singleShot(10, lambda: self._restore_focus_and_paste(12))
 
     def _write_clipboard_payload(self, data):
         try:
             if data["type"] == "text":
                 self.clipboard.setText(data["content"])
-                return self.clipboard.text() == data["content"]
+                ok = self.clipboard.text() == data["content"]
+                logger.info(
+                    "write_clipboard_text clip_id=%s success=%s length=%s",
+                    data.get("id"),
+                    ok,
+                    len(data["content"]),
+                )
+                return ok
 
             p = os.path.join(IMAGE_DIR, data["content"])
             if not os.path.exists(p):
+                logger.error("write_clipboard_image_missing clip_id=%s path=%s", data.get("id"), p)
                 return False
 
             pixmap = QPixmap(p)
             if pixmap.isNull():
+                logger.error("write_clipboard_image_invalid clip_id=%s path=%s", data.get("id"), p)
                 return False
 
             self.clipboard.setPixmap(pixmap)
             mime = self.clipboard.mimeData()
             if not mime or not mime.hasImage():
+                logger.error("write_clipboard_image_no_mime clip_id=%s", data.get("id"))
                 return False
 
             img = QImage(mime.imageData())
-            return not img.isNull() and self._image_storage_name(img) == data["content"]
+            ok = not img.isNull() and self._image_storage_name(img) == data["content"]
+            logger.info("write_clipboard_image clip_id=%s success=%s", data.get("id"), ok)
+            return ok
         except Exception:
+            logger.exception("write_clipboard_payload_exception clip_id=%s", data.get("id"))
             return False
 
     def _perform_keyboard_paste(self):
         """Simulate Ctrl+V using pure Win32 keybd_event (no pynput)."""
         try:
+            logger.info("perform_keyboard_paste_start target_hwnd=%s", self.last_active_window_handle)
             simulate_paste()
         except Exception:
-            pass
+            logger.exception("perform_keyboard_paste_exception")
         finally:
+            logger.info("perform_keyboard_paste_end")
             self._finish_paste_attempt()
 
     def _reset_ui_after_paste_request(self):
@@ -1024,6 +1121,11 @@ class ClientApp(QWidget):
     def _finish_paste_attempt(self, clear_guard=False):
         if clear_guard:
             self.pending_clipboard_guard = None
+        logger.info(
+            "finish_paste_attempt clear_guard=%s target_hwnd=%s",
+            clear_guard,
+            self.last_active_window_handle,
+        )
         self._paste_in_progress = False
         self.input_locked = False
 
@@ -1041,9 +1143,21 @@ class ClientApp(QWidget):
                     user32.SetFocus(target_hwnd)
                     user32.AttachThreadInput(ft, tt, False)
                 except Exception:
-                    pass
+                    logger.exception(
+                        "restore_focus_exception target_hwnd=%s foreground_hwnd=%s",
+                        target_hwnd,
+                        foreground_hwnd,
+                    )
 
-        if attempts_remaining > 0 and not self._ready_to_paste():
+        ready = self._ready_to_paste()
+        logger.info(
+            "restore_focus_check attempts_remaining=%s ready=%s target_hwnd=%s foreground_hwnd=%s",
+            attempts_remaining,
+            ready,
+            target_hwnd,
+            ctypes.windll.user32.GetForegroundWindow() if sys.platform == "win32" else None,
+        )
+        if attempts_remaining > 0 and not ready:
             QTimer.singleShot(
                 20, lambda: self._restore_focus_and_paste(attempts_remaining - 1)
             )
@@ -1359,6 +1473,7 @@ class ClientApp(QWidget):
 
 
 def main():
+    logger.info("main_start pid=%s", os.getpid())
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
@@ -1367,7 +1482,10 @@ def main():
     palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
     app.setPalette(palette)
     window = ClientApp()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    logger.info("main_exit exit_code=%s", exit_code)
+    _fault_log_handle.flush()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
