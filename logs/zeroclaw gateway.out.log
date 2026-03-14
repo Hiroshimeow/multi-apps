@@ -1,0 +1,18 @@
+[2m2026-02-25T04:42:36.646631Z[0m [32m INFO[0m [2mzeroclaw::config::schema[0m[2m:[0m Config loaded [3mpath[0m[2m=[0mC:\Users\admin\.zeroclaw\config.toml [3mworkspace[0m[2m=[0mC:\Users\admin\.zeroclaw\workspace [3msource[0m[2m=[0m"default" [3minitialized[0m[2m=[0mfalse
+[2m2026-02-25T04:42:36.646884Z[0m [32m INFO[0m [2mzeroclaw[0m[2m:[0m 🚀 Starting ZeroClaw Gateway on 127.0.0.1:3000
+🦀 ZeroClaw Gateway listening on http://127.0.0.1:3000
+  🌐 Web Dashboard: http://127.0.0.1:3000/
+  POST /pair      — pair a new client (X-Pairing-Code header)
+  POST /webhook   — {"message": "your prompt"}
+  GET  /api/*     — REST API (bearer token required)
+  GET  /ws/chat   — WebSocket agent chat
+  GET  /health    — health check
+  GET  /metrics   — Prometheus metrics
+
+  🔐 PAIRING REQUIRED — use this one-time code:
+     ┌──────────────┐
+     │  833360  │
+     └──────────────┘
+     Send: POST /pair with header X-Pairing-Code: 833360
+  Press Ctrl+C to stop.
+

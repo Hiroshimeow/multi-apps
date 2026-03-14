@@ -1,0 +1,227 @@
+# ============================================
+# GLOBAL SETTINGS  
+# ============================================
+# * `log`: Cấu hình log hệ thống.
+#   * `dir`: Thư mục chứa log (mặc định: "./logs" tương đối với thư mục launcher).
+#   * `rotate_days`: Số ngày giữ log.
+global:
+  default_conda_env: "ana11"
+  session:
+    type: "subprocess"
+  log:
+    dir: "./logs"
+    rotate_days: 7
+
+  multi_run: false
+  interactive: true
+
+# ============================================
+# APPS
+# ============================================
+apps:
+  - name: "Screens-trans-chatbot"
+    type: "uv"
+    command: "cd E:/python_project/Screens-Trans-Chatbot && uv run main.py"
+    enabled: true
+    os: win11
+    auto_start: false
+    multi_run: true
+
+  - name: "Auto Suggest"
+    type: "python"
+    path: "E:/python_project/auto-suggest/main.py"
+    env: null
+    args: null
+    enabled: false
+    os: win11
+
+  - name: "Copy-Content"
+    type: "python"
+    path: "E:/python_project/multi-run-apps/tools/copy-content/copy-content.py"
+    auto_start: true
+    enabled: true
+    multi_run: false
+    os: win11
+
+  - name: "Advance Clipboard"
+    type: "python"
+    path: "E:/python_project/multi-run-apps/tools/advance-clipboard/main.py"
+    enabled: true
+    auto_start: true
+    multi_run: false
+    os: win11
+
+  - name: "openclaw gateway"
+    type: "command"
+    command: "C:/Users/admin/AppData/Roaming/npm/openclaw.cmd gateway"
+    env_vars:
+      PATH: "C:/Program Files/nodejs;${PATH}"
+    enabled: true
+    multi_run: false
+    auto_start: false
+    os: win11
+
+  - name: "openclaw-repo gateway"
+    type: "cmd"
+    command: "cd E:/git-project/openclaw; pnpm openclaw --profile repo gateway --port 18791 --verbose"
+    enabled: true
+    multi_run: false
+    auto_start: false
+    os: win11
+
+  - name: "nanobot gateway"
+    type: "command"
+    command: "C:/Users/admin/miniconda3/Scripts/nanobot.exe gateway"
+    enabled: true
+    multi_run: false
+    auto_start: false
+    os: win11
+
+  - name: "zeroclaw gateway"
+    type: "command"
+    command: "C:/Users/admin/.cargo/bin/zeroclaw.exe gateway"
+    enabled: true
+    multi_run: false
+    auto_start: false
+    os: win11
+
+  - name: "PDF 2 PNG Converter"
+    type: "python"
+    path: "E:/python_project/tools/pdf_to_png.py"
+    enabled: true
+    multi_run: false
+    os: win11
+
+
+# GUIDE
+# Dưới đây là danh sách toàn bộ các parameters (tham số) được hỗ trợ trong khối `apps:` của file `setting.yaml`, dựa trên logic phân tích cấu hình (`lib/config.py`) của Launcher. Mình sẽ chia thành các nhóm để bạn dễ quản lý:
+
+# ### 1. Nhóm Tham số Cốt lõi (Core Parameters)
+
+# * **`name`** *(string, Bắt buộc)*: Tên của ứng dụng. Sẽ được hiển thị trên giao diện System Tray (Windows) hoặc TUI (Linux), và dùng làm tên file log, tên session tmux.
+# * *Ví dụ*: `name: "My API Server"`
+
+
+# * **`type`** *(string, Tùy chọn)*: Loại trình khởi chạy (Runner). Nếu không điền, hệ thống sẽ tự động đoán dựa trên đuôi file (vd: `.py` -> `python`, `.bat` -> `shell`). Các giá trị hỗ trợ:
+# * `python`: Chạy script bằng trình thông dịch Python.
+# * `uv` hoặc `uv run`: Sử dụng công cụ `uv` hiện đại. 
+#           Lưu ý: Luôn cần `cd` đến thư mục project trước khi chạy `uv run`. 
+#           Bạn có thể dùng `workdir` hoặc viết trực tiếp trong `command`.
+# * `shell`: Chạy các file script hệ thống (`.bat`, `.sh`, `.vbs`, `.cmd`).
+# * `command`: Chạy trực tiếp một câu lệnh shell phức tạp.
+# * `cmd`: Mô phỏng user gõ lệnh trong CMD/Terminal. Hỗ trợ `;` hoặc `&&` để nối nhiều lệnh,
+#           tự detect `cd <path>` đầu tiên làm workdir, chạy qua `cmd /c` (Windows) hoặc `bash -c` (Linux).
+#           Dùng khi cần: cd vào thư mục rồi chạy lệnh, hoặc chuỗi lệnh phức tạp.
+# * `gunicorn`: Chạy server WSGI cho web app.
+
+
+# * **`path`** *(string, Tùy chọn)*: Đường dẫn tuyệt đối hoặc tương đối đến file script/thực thi. (Tương đối thì tính từ vị trí file `setting.yaml`).
+# * **`command`** (hoặc **`cmd`**) *(string, Tùy chọn)*: Lệnh trực tiếp muốn thực thi trong shell. Thường dùng khi `type: command` hoặc khi bạn muốn override chuỗi lệnh cho `uv` (như cấu trúc `cd xxx && uv run yyy`).
+#   Lưu ý: Với `uv`, bạn nên dùng `cd project-dir && uv run script.py` để đảm bảo môi trường uv được kích hoạt đúng.
+
+
+# > **Lưu ý:** Một app cần có ít nhất `path` hoặc `command/cmd` để biết chạy cái gì.
+
+# ---
+
+# ### 2. Nhóm Môi trường & Tham số (Environment & Execution)
+
+# * **`workdir`** *(string, Tùy chọn)*: Thư mục làm việc (Working Directory). Là nơi tiến trình (process) sẽ được chạy (tương đương với việc gõ lệnh `cd` đến thư mục đó).
+# * *Mặc định*: Nếu không điền, hệ thống tự động lấy thư mục cha của file ở khóa `path`.
+
+
+# * **`env`** *(dict, Tùy chọn)*: Khai báo môi trường ảo (Virtual Environment) cần activate cho Python/Gunicorn.
+# * *Ví dụ Conda*: `env: { type: "conda", name: "ana11" }`
+# * *Ví dụ Venv*: `env: { type: "venv", path: "./venv" }`
+# * *Hệ thống*: `env: { type: "system" }` hoặc `env: null`
+
+
+# * **`args`** *(list, Tùy chọn)*: Danh sách các tham số truyền thêm vào đuôi câu lệnh (chủ yếu dùng cùng với `path`).
+# * *Ví dụ*: `args: ["--port", "8080", "--debug"]`
+
+
+# * **`env_vars`** *(dict, Tùy chọn)*: Inject trực tiếp các biến môi trường vào process khi chạy. Hỗ trợ lấy biến hệ thống cũ qua cú pháp `${TÊN_BIẾN}`.
+# * *Ví dụ*: `env_vars: { PORT: "8000", PATH: "C:/nodejs;${PATH}" }`
+
+
+
+# ---
+
+# ### 3. Nhóm Điều khiển Luồng & Giao diện (Control & UI Flags)
+
+# * **`enabled`** *(boolean, Mặc định: true)*: Bật/tắt ứng dụng. Nếu `false`, app sẽ không hiện trên giao diện và không thể chạy.
+# * **`auto_start`** *(boolean, Mặc định: false)*: Nếu `true`, app sẽ tự động được khởi chạy ngầm ngay khi bạn mở Launcher (System Tray) lên.
+# * **`multi_run`** *(boolean, Mặc định: false)*: Cờ cho phép chạy đa tiến trình.
+# * Nếu `false`: UI sẽ disable nút `Start` nếu app đang chạy để tránh việc vô tình bấm chạy đè 2 lần (gây lỗi port).
+# * Nếu `true`: Bạn có thể bấm Start nhiều lần để sinh ra nhiều process song song. (Hữu ích cho các worker không khóa port).
+
+
+# * **`os`** *(string / list, Tùy chọn)*: Chỉ định hệ điều hành mà app này được phép hiển thị. Hữu ích khi bạn dùng chung 1 file `setting.yaml` cho cả máy Win và Linux.
+# * *Ví dụ Windows*: `os: "windows"` hoặc `os: ["win", "win11"]`
+# * *Ví dụ Linux*: `os: ["linux", "ubuntu"]`
+
+
+
+# ---
+
+# ### 4. Nhóm Đặc thù Gunicorn (Dành riêng cho `type: gunicorn`)
+
+# * **`module`** *(string, Bắt buộc nếu dùng gunicorn)*: Tên của module chứa ứng dụng web (giống cách gọi gunicorn chuẩn).
+# * *Ví dụ*: `module: "main:app"` hoặc `module: "config.wsgi:application"`
+
+
+# * **`gunicorn`** *(dict, Tùy chọn)*: Chứa các cờ config riêng cho gunicorn, hệ thống sẽ tự động chuyển thành `--key value`.
+# * *Ví dụ*:
+# ```yaml
+# gunicorn:
+#   bind: "0.0.0.0:8000"
+#   workers: 4
+#   preload: true # boolean sẽ thành flag --preload không cần value
+
+# ```
+
+
+
+
+
+# ---
+
+# ### 5. Nhóm Plugin Tương lai / Nâng cao (Future & Advanced)
+
+# Các tham số này đã được code nền trong `lib/config.py` chuẩn bị sẵn để phát triển các tính năng mở rộng trong tương lai:
+
+# * **`session`** *(string, Tùy chọn)*: Ghi đè cách quản lý process. Có thể ép dùng `tmux` thay vì `subprocess` (chỉ Linux).
+# * **`health_check`** *(dict/boolean, Tùy chọn)*: (Tính năng tương lai) Để ping API check xem app có thực sự "sống" hay không.
+# * **`depends_on`** *(list, Tùy chọn)*: (Tính năng tương lai) Khai báo app này phải đợi các app khác start xong mới chạy.
+# * **`start_delay`** *(int, Mặc định: 0)*: (Tính năng tương lai) Độ trễ (giây) trước khi tự động start.
+# * **`background`** *(boolean, Mặc định: true)*: (Dự phòng) Xác định xem process có bắt buộc chạy ngầm hoàn toàn hay không.
+
+# ### Ví dụ kết hợp tổng quát (Full Blueprint):
+
+# ```yaml
+# apps:
+#   - name: "Super Backend API"
+#     type: "python"
+#     path: "./backend/run.py"
+#     workdir: "/absolute/path/to/project"
+#     cmd: "cd backend && python run.py" # Override path action if type allows it
+#     env:
+#       type: "conda"
+#       name: "fastapi-env"
+#     env_vars:
+#       API_KEY: "secret_123"
+#       NODE_ENV: "production"
+#     args:
+#       - "--reload"
+#       - "--host"
+#       - "127.0.0.1"
+#     enabled: true
+#     auto_start: true
+#     multi_run: false
+#     os: ["win11", "linux"]
+#
+#   - name: "Modern UV App"
+#     type: "uv"
+#     command: "cd my-project && uv run main.py" # Luôn cd vào project trước khi uv run
+#     enabled: true
+# ```

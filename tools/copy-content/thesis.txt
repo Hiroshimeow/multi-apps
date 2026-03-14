@@ -1,0 +1,732 @@
+Root: D:\lrean\LV\MY_THESIS_FOLDER\chapters
+Date: 2026-02-08 00:11:46
+
+----------------------------------------
+File: abstract.tex
+----------------------------------------
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+Hyperspectral Imaging (HSI) holds immense potential for autonomous driving perception due to its ability to distinguish materials based on fine-grained spectral signatures, a capability that standard RGB cameras lack. However, the high dimensionality of HSI data creates a ``curse of dimensionality,'' making real-time processing on resource-constrained edge devices (such as those in vehicles) computationally prohibitive. Existing solutions either sacrifice accuracy for speed (statistical filter methods) or rely on computationally expensive, offline selection processes (wrapper methods like SVM-RFE).
+
+To address this challenge, this thesis proposes TABS-UNet (Task-Aware Band Selection U-Net), a novel end-to-end framework that jointly learns band selection and semantic segmentation. We introduce a differentiable band selection module based on the Gumbel-Softmax distribution and the Straight-Through Estimator (STE). This mechanism allows the network to learn a discrete subset of the most discriminative spectral bands directly from the segmentation loss, bridging the gap between discrete selection and continuous gradient-based optimization. Furthermore, we design a hardware-aware lightweight U-Net architecture specifically optimized for embedded systems, featuring reflection padding and bottleneck spatial attention.
+
+Experimental results on the HSI-Drive dataset demonstrate that TABS-UNet achieves a Mean Intersection over Union (mIoU) of 0.763 using only 5 selected bands, effectively approaching the accuracy of full-band models while reducing Floating Point Operations (FLOPs) by approximately 95\%. The proposed method outperforms traditional statistical selection techniques and matches the accuracy of complex wrapper methods while offering superior training stability. Crucially, the lightweight backbone achieves an inference throughput of 16.28 FPS on a Raspberry Pi 4 Model B, validating the efficiency of the proposed architecture for edge deployment.
+
+
+----------------------------------------
+File: acknowledgement.tex
+----------------------------------------
+\chapter*{Acknowledgements}
+
+I would like to express my sincere gratitude to my supervisor, Associate Professor Daisuke Miyazaki, for his continuous support, patience, and motivation. His immense knowledge and plentiful experience have encouraged me throughout the course of my academic research and daily life.
+
+I would also like to thank Assistant Professor Chao Wang for his insightful comments and constructive feedback, which greatly improved the quality of this thesis. His guidance on the implementation and experimental setup was invaluable.
+
+Furthermore, I am grateful to all the members of the Intelligent Informatics Laboratory for their friendship and for providing a stimulating research environment.
+
+Finally, I would like to thank my family and friends for their unwavering support and encouragement during my studies. This work would not have been possible without them.
+
+
+
+----------------------------------------
+File: chapter1_intro.tex
+----------------------------------------
+\chapter{Introduction}
+\label{chap:intro}
+
+\section{Research Background and Motivation}
+
+Perception is the cornerstone of autonomous driving systems. To ensure safety, vehicles must accurately identify road surfaces, markings, and obstacles under varying environmental conditions. While RGB cameras and LiDAR are the industry standards, they possess inherent limitations. RGB cameras often fail in low-light conditions or when distinguishing materials with similar colors (e.g., differentiating real grass from artificial turf). LiDAR provides excellent geometric depth but lacks texture and semantic richness.
+
+Hyperspectral Imaging (HSI) has emerged as a promising modality to bridge this gap. By capturing hundreds of narrow spectral bands across the electromagnetic spectrum (Visible to Near-Infrared (NIR)), HSI obtains a unique ``spectral fingerprint'' for every pixel. This allows for superior material distinction—such as detecting black ice on asphalt or classifying vegetation health—capabilities that are physically impossible for standard RGB sensors.
+
+However, the deployment of HSI on mobile robotic platforms faces the ``curse of dimensionality.'' A standard hyperspectral data cube contains $25\times$ to $100\times$ more data than an RGB image. Processing this massive volume of high-dimensional data introduces two critical bottlenecks:
+\begin{enumerate}
+	\item \textbf{Computational Latency:} High-dimensional convolution operations require Giga-Floating Point Operations (GFLOPs) that exceed the capacity of resource-constrained edge devices (e.g., Raspberry Pi series).
+	\item \textbf{Data Redundancy:} Adjacent spectral bands are highly correlated (Hughes phenomenon). Using all bands often introduces noise rather than information, potentially degrading segmentation performance.
+\end{enumerate}
+
+\begin{figure}[htbp]
+	\centering
+	% [OFFICE PAPER FIGURE 1]
+	\includegraphics[width=\linewidth]{figures/fig1-hai.png}
+	\caption{Comparison of spectral modeling pipelines: (a) two-stage frameworks with fixed band selection; (b) full-band models; (c) TABS-UNet (Ours), which unifies band selection and spectral-attention compression in an end-to-end trainable model.}
+	\label{fig:pipeline_comparison}
+\end{figure}
+
+\section{Problem Statement}
+
+The core research question of this thesis is: \textit{How can we reduce the dimensionality of HSI data to enable real-time processing on edge devices without sacrificing the semantic segmentation accuracy?}
+
+Existing solutions fall short in addressing this specific need:
+\begin{enumerate}
+	\item \textbf{Full-Band Deep Learning:} Using 3D-CNNs or deep 2D-CNNs on the full spectrum achieves high accuracy but is computationally prohibitive (often causing Out-of-Memory (OOM) errors on edge hardware).
+	\item \textbf{Statistical Filter Methods (Task-Agnostic):} Methods like Entropy, Variance, or Principal Component Analysis (PCA) reduce dimensionality based on data statistics. However, high entropy (randomness) does not equate to high semantic value. These methods often select noisy bands that confuse the segmentation network.
+	\item \textbf{Wrapper Methods (Offline Selection):} Methods like SVM-RFE select bands based on accuracy, but they operate in a disconnected two-stage process. The bands are selected offline using a linear classifier (SVM), which may not be optimal for the non-linear deep neural network used in the final system.
+\end{enumerate}
+
+\textbf{Distinction: Fixed vs. Learnable Selection} \\
+It is crucial to define the gap we address.
+\begin{itemize}
+	\item \textbf{Fixed Selection (Prior Art):} Traditional methods calculate a static score for each band based on dataset statistics. Once calculated, these indices never change.
+	\item \textbf{Learnable Selection (Proposed):} We propose a method where the ``importance score'' of a band is a \textit{trainable parameter} (weight) in the neural network. This score is updated via backpropagation, meaning the model \textit{learns} to select bands that specifically minimize the segmentation loss.
+\end{itemize}
+
+\section{Thesis Contributions}
+
+To address these limitations, we propose \textbf{TABS-UNet} (Task-Aware Band Selection U-Net). This framework integrates a differentiable band selection module directly into a lightweight segmentation network.
+
+The specific contributions are:
+\begin{enumerate}
+	\item \textbf{End-to-End Differentiable Hard Selection:} We utilize the Gumbel-Softmax distribution combined with the Straight-Through Estimator (STE) to bridge the gap between discrete band selection and continuous gradient optimization. This allows the network to learn the optimal subset of physical bands ($k=5$) dynamically during training.
+	\item \textbf{Hardware-Aware Lightweight Architecture:} We design a specialized U-Net optimized for resource-constrained edge devices. By employing Reflection Padding (to handle $216 \times 409$ inputs without resizing artifacts) and Bottleneck Spatial Attention, we achieve a model size of only 0.27M parameters.
+	\item \textbf{Efficiency and Stability:} We demonstrate that TABS-UNet achieves competitive accuracy (\textbf{0.763} mIoU) compared to heavy baselines while reducing FLOPs by 95\%. Furthermore, we provide a stability analysis showing our method is robust to random initialization, unlike traditional wrapper methods.
+\end{enumerate}
+
+\section{Thesis Organization}
+The remainder of this thesis is structured as follows: Chapter \ref{chap:related} reviews related work in HSI deep learning. Chapter \ref{chap:method} details the mathematical formulation of the Gumbel-Softmax and STE mechanisms. Chapter \ref{chap:experiments} presents the experimental results on the HSI-Drive dataset. Chapter \ref{chap:discussion} interprets the physical meaning of the selected bands. Finally, Chapter \ref{chap:conclusion} concludes the study.
+
+
+----------------------------------------
+File: chapter2_related.tex
+----------------------------------------
+\chapter{Related Work}
+\label{chap:related}
+
+\section{Semantic Segmentation in Autonomous Driving}
+
+Semantic segmentation is a fundamental computer vision task that assigns a class label to every pixel in an image. In the context of autonomous driving, it is crucial for scene understanding, allowing the vehicle to identify navigable surfaces (roads), obstacles (cars, pedestrians), and traffic signs.
+
+Early approaches relied on traditional machine learning techniques with hand-crafted features, such as Textons or Histogram of Oriented Gradients (HOG), coupled with classifiers like Random Forests or Support Vector Machines (SVM). However, the advent of Convolutional Neural Networks (CNNs) revolutionized the field. The Fully Convolutional Network (FCN) \cite{long2015fully} was the first to demonstrate end-to-end training for pixel-wise prediction by replacing fully connected layers with convolutional ones.
+
+Building on FCN, the U-Net architecture \cite{ronneberger2015u} introduced skip connections that preserve high-resolution spatial features from the encoder to the decoder, proving highly effective for biomedical image segmentation and later adopted for general scene understanding. More complex architectures like DeepLabV3+ \cite{chen2018encoder} utilize Atrous Spatial Pyramid Pooling (ASPP) to capture multi-scale context. While these models achieve state-of-the-art accuracy on RGB datasets like Cityscapes, their direct application to HSI is hindered by the massive increase in input channels, leading to prohibitive computational costs.
+
+\section{Deep Learning for Hyperspectral Imaging}
+
+Hyperspectral image analysis has traditionally focused on remote sensing applications (e.g., satellite imagery for agriculture). Deep learning models for HSI can be categorized based on their input dimensionality:
+
+\begin{itemize}
+	\item \textbf{1D-CNNs:} These models process only the spectral signature of a single pixel, ignoring spatial context. While computationally cheap, they result in ``noisy'' segmentation maps lacking spatial coherence.
+	\item \textbf{2D-CNNs:} These treat the HSI cube as a multi-channel image, applying spatial convolutions. This is the standard approach for transfer learning from RGB models but requires dimensionality reduction to be feasible.
+	\item \textbf{3D-CNNs:} These operate on the full volumetric $(H \times W \times C)$ data, capturing joint spectral-spatial features. While theoretically superior, 3D convolutions are extremely computationally expensive and prone to overfitting on small datasets like HSI-Drive.
+\end{itemize}
+
+Recently, Transformer-based architectures such as SpectralFormer \cite{hong2021spectralformer} and MorphFormer \cite{roy2023morphformer} have been proposed. These models leverage self-attention mechanisms to capture long-range dependencies across the spectrum. However, the computational complexity of standard self-attention is quadratic $O(N^2)$ with respect to the input sequence length (number of bands). For edge deployment in vehicles, where latency must remain under 100~ms, the heavy computational load of Transformers renders them impractical compared to efficient CNN-based solutions like MobileSACNet \cite{mobilesacnet}.
+
+\section{Band Selection Techniques}
+
+Band selection is a dimensionality reduction strategy that selects a subset of the most informative bands from the original hyperspectral cube. Unlike feature extraction methods (e.g., PCA) that project data into a new space, band selection preserves the original physical meaning of the data. This is critical for building cost-effective multispectral cameras with physical filters. Existing methods are categorized as follows:
+
+\subsection{Filter Methods (Statistical)}
+Filter methods select bands based on intrinsic statistical properties of the data, independent of the downstream classification task.
+
+\textbf{1. Entropy \cite{shannon1948mathematical}:} Measures the information content or ``randomness'' of a band. For a band $X_b$ with probability distribution $p(x)$, entropy is defined as:
+\begin{equation}
+	H(X_b) = - \sum_{i} p(x_i) \log p(x_i)
+\end{equation}
+High entropy is often assumed to correlate with high information content, though it may also indicate noise.
+
+\textbf{2. Correlation \cite{benesty2009pearson}:} Removes redundant bands by analyzing the Pearson correlation coefficient. Highly correlated bands provide duplicate information.
+\begin{equation}
+	\rho_{i,j} = \frac{\text{cov}(X_i, X_j)}{\sigma_i \sigma_j}
+\end{equation}
+
+\textbf{3. Fisher Score \cite{duda2001pattern}:} Evaluates the discriminative power of bands by maximizing the distance between class means while minimizing the variance within each class:
+\begin{equation}
+	F = \frac{\sum n_c (\mu_c - \mu)^2}{\sum n_c \sigma_c^2}
+\end{equation}
+
+\textbf{4. Spectral Angle Distance (SAD) \cite{kruse1993spectral}:} Measures the geometric similarity between two spectral vectors $\mathbf{x}$ and $\mathbf{y}$ by calculating the angle between them:
+\begin{equation}
+	\theta(\mathbf{x}, \mathbf{y}) = \arccos \left( \frac{\mathbf{x} \cdot \mathbf{y}}{\|\mathbf{x}\| \|\mathbf{y}\|} \right)
+\end{equation}
+\textit{\textbf{Note on Implementation:}} In our baseline experiments, we adopted a simplified ranking strategy based on \textbf{Spectral Energy (Variance)} as a computationally efficient proxy for SAD. This assumes that bands with high statistical variance ($\sigma^2_b = \frac{1}{N} \sum (x_{j,b} - \mu_b)^2$) contain the most significant spectral information. In the results section, this baseline is denoted as SAD.
+
+While computationally fast, these methods are \textit{task-agnostic}. A band with high entropy might contain noise rather than discriminative features for road detection. Consequently, filter methods often yield suboptimal segmentation performance.
+
+\subsection{Wrapper Methods}
+Wrapper methods evaluate band subsets by training a classifier and measuring its accuracy.
+
+\textbf{SVM-RFE (Support Vector Machine -- Recursive Feature Elimination) \cite{guyon2002gene}:} This method uses a Linear Support Vector Machine to find the optimal separating hyperplane. Bands are ranked based on the magnitude of their weights ($|w|$), identifying features that contribute most to the classification boundary.
+They iteratively remove the least significant bands. While \textit{task-aware}, these methods suffer from two major drawbacks:
+\begin{enumerate}
+	\item \textbf{Computational Cost:} The iterative training process is extremely slow.
+	\item \textbf{Disconnection:} The selection process is decoupled from the final segmentation model training. The bands selected by a linear SVM may not be optimal for a non-linear U-Net.
+\end{enumerate}
+
+\subsection{Differentiable Feature Selection}
+A more recent direction is embedding feature selection directly into the neural network training. Abid et al. \cite{abid2019concrete} introduced \textbf{Concrete Autoencoders}, which use a continuous relaxation of the discrete distribution to learn feature selection for unsupervised reconstruction.
+
+Our work extends this principle to the supervised domain. While Concrete Autoencoders optimize for data reconstruction (minimizing Mean Squared Error), our proposed TABS framework optimizes for semantic segmentation (minimizing Cross-Entropy/Dice Loss). We specifically adapt the Gumbel-Softmax relaxation to work within a lightweight U-Net architecture, creating a unified, end-to-end pipeline suitable for real-time inference.
+
+
+----------------------------------------
+File: chapter3_method.tex
+----------------------------------------
+\chapter{Methodology}
+\label{chap:method}
+
+\section{Overview of the Proposed Framework}
+
+We propose a unified, end-to-end framework named \textbf{TABS-UNet}. As illustrated in Figure \ref{fig:model_arch}, the architecture consists of two primary modules:
+\begin{enumerate}
+	\item \textbf{Task-Aware Band Selection (TABS) Module:} A learnable ``gate'' that dynamically selects the top-$k$ most discriminative spectral bands from the input tensor.
+	\item \textbf{Lightweight U-Net Backbone:} A streamlined encoder-decoder network that processes the reduced $k$-band tensor to generate the final segmentation mask.
+\end{enumerate}
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=\linewidth]{figures/model-hai.png}
+	\caption{Architecture of TABS-UNet. The TABS module selects $k$ bands using Gumbel-Softmax, which are then processed by a lightweight U-Net with Bottleneck Spatial Attention.}
+	\label{fig:model_arch}
+\end{figure}
+
+\section{Task-Aware Band Selection (TABS)}
+\label{sec:tabs_module}
+
+
+\begin{figure}[htbp]
+	\centering
+	% Training Dynamics: Tau + Probabilities
+	\begin{subfigure}[b]{1.0\linewidth}
+		\includegraphics[width=\linewidth]{figures/training_dynamics_tau_600dpi.png}
+		\caption{Temperature Annealing Schedule}
+	\end{subfigure}
+
+	\begin{subfigure}[b]{1.0\linewidth}
+		\includegraphics[width=\linewidth]{figures/training_dynamics_probs_600dpi.png}
+		\caption{Evolution of Selection Probabilities}
+	\end{subfigure}
+
+	\caption{Training Dynamics of the Gumbel-Softmax mechanism \cite{jang2017categorical}.}
+	\label{fig:training_dynamics}
+\end{figure}
+
+\begin{figure}[htbp]
+	\centering
+	% Placeholder for Figure 3.2: Gumbel Flow / STE
+	\includegraphics[width=\linewidth]{figures/gumbel_flow_600dpi.png}
+	\caption{Mechanism of the Straight-Through Estimator (STE) \cite{bengio2013estimating}. The Forward Pass (solid arrows) utilizes a discrete Top-K operation to generate a hard binary mask for physical band selection. The Backward Pass (dashed arrows) bypasses the non-differentiable step by approximating gradients via the continuous Softmax distribution, enabling end-to-end updates of the importance scores $\pi$.}
+	\label{fig:gumbel_flow}
+\end{figure}
+
+\textbf{1. Forward Pass (Discrete Hard Selection):} \\
+In the forward pass, we require a binary mask to physically reduce the data. We perform a hard Top-K operation on the perturbed logits $y$.
+We generate a binary mask $M \in \{0, 1\}^C$ where:
+\begin{equation}
+	M_i =
+	\begin{cases}
+		1 & \text{if } y_i \text{ is in top-}k(y) \\
+		0 & \text{otherwise}
+	\end{cases}
+\end{equation}
+We then apply this mask to the input $X$ via index selection:
+\begin{equation}
+	X_{selected} = X[:, :, M==1]
+\end{equation}
+\textit{Result:} The output $X_{selected}$ has dimensions $H \times W \times k$. This physical reduction reduces the computational load for the subsequent U-Net.
+
+\textbf{2. Backward Pass (Continuous Approximation):} \\
+We cannot calculate gradients through the discrete Top-K function. Therefore, during backpropagation, we approximate the hard selection with the continuous Softmax function. Let $y_i = l_i + g_i$ denote the perturbed logits, where $l_i$ are the learnable parameters and $g_i$ are samples from the $\text{Gumbel}(0, 1)$ distribution. The probability of selecting band $i$ is approximated as:
+\begin{equation}
+	p_i = \frac{\exp(y_i / \tau)}{\sum_{j=1}^{C} \exp(y_j / \tau)}
+\end{equation}
+where $\tau$ is a temperature parameter. The gradients flow through $p_i$ to update the learnable importance scores $\pi$ (derived from $l$).
+\begin{equation}
+	\nabla_{\pi} \mathcal{L} \approx \nabla_{p} \mathcal{L} \cdot \frac{\partial p}{\partial \pi}
+\end{equation}
+This allows the network to update the importance scores $\pi$ even though the forward pass used a hard binary mask.
+
+\section{Network Architecture}
+
+\subsection{Input Preprocessing: Reflection Padding}
+The HSI-Drive dataset images have a native resolution of $216 \times 409$.
+\begin{itemize}
+	\item \textbf{The Problem:} The U-Net architecture utilizes 4 max-pooling layers, which reduces the spatial dimension by a factor of $2^4 = 16$. While $216$ is not divisible by standard factors like 32, ensuring divisibility by 16 ($216/16 = 13.5$) is also problematic for symmetric upsampling.
+	\item \textbf{The Solution:} We apply \textbf{Reflection Padding} to adjust the input size to $224 \times 416$.
+	      \begin{itemize}
+		      \item Height: $216 \to 224$ (Pad 4 pixels on top/bottom). Divisible by 32 ($224/32=7$).
+		      \item Width: $409 \to 416$ (Pad 3 and 4 pixels on left/right). Divisible by 32 ($416/32=13$).
+	      \end{itemize}
+	      Reflection padding mirrors the pixels at the boundary (e.g., $P_{-1} = P_{1}$) rather than padding with zeros. This preserves the texture continuity at the image borders, preventing the convolution filters from learning artificial edge features caused by black borders.
+\end{itemize}
+
+\subsection{Lightweight U-Net Backbone}
+To enable operation on resource-constrained edge devices, we significantly reduce the number of filters compared to the standard U-Net (which typically starts with 64 filters).
+\begin{itemize}
+	\item \textbf{Justification for Architecture:} The standard U-Net configuration is computationally prohibitive for embedded systems due to high memory bandwidth and power requirements. To address this, we adopted a lightweight design strategy targeting general edge computing constraints. We empirically set the initial filter width to 6 ($6 \to 12 \to 24 \to 48$). This compact configuration was chosen to drastically minimize the parameter count and FLOPs, ensuring feasibility on low-power hardware (as validated on the Raspberry Pi 4 in our experiments) while retaining the multi-scale feature extraction capability of the U-Net structure.
+\end{itemize}
+
+The detailed architecture configuration is summarized in Table \ref{tab:arch_details}.
+
+\begin{table}[htbp]
+	\centering
+	\caption{Detailed Architecture of the Lightweight U-Net Backbone. Note: ``Conv-BN-ReLU'' denotes a sequence of Convolution, Batch Normalization, and ReLU activation.}
+	\label{tab:arch_details}
+	\small
+	\begin{tabular}{lcccc}
+		\toprule
+		\textbf{Stage} & \textbf{Output Res.} & \textbf{Channels} & \textbf{Operations}       & \textbf{Kernel} \\ \midrule
+		Input          & $224 \times 416$     & $k=5$             & (Preprocessed Tensor)     & -               \\
+		Encoder 1      & $224 \times 416$     & 6                 & $2 \times$ (Conv-BN-ReLU) & $3\times3$      \\
+		Pooling 1      & $112 \times 208$     & 6                 & MaxPool                   & $2\times2$      \\
+		Encoder 2      & $112 \times 208$     & 12                & $2 \times$ (Conv-BN-ReLU) & $3\times3$      \\
+		Pooling 2      & $56 \times 104$      & 12                & MaxPool                   & $2\times2$      \\
+		Encoder 3      & $56 \times 104$      & 24                & $2 \times$ (Conv-BN-ReLU) & $3\times3$      \\
+		Pooling 3      & $28 \times 52$       & 24                & MaxPool                   & $2\times2$      \\
+		Encoder 4      & $28 \times 52$       & 48                & $2 \times$ (Conv-BN-ReLU) & $3\times3$      \\
+		Pooling 4      & $14 \times 26$       & 48                & MaxPool                   & $2\times2$      \\
+		Bottleneck     & $14 \times 26$       & 96                & $2 \times$ Conv + SA      & $3\times3$      \\ \midrule
+		Decoder        & ...                  & ...               & Transposed Conv + Skip    & $2\times2$      \\ \bottomrule
+	\end{tabular}
+\end{table}
+
+\begin{itemize}
+	\item \textbf{Encoder:} Consists of 4 downsampling blocks. The number of filters follows the sequence: $6 \to 12 \to 24 \to 48$. Note that the input channels are exactly $k$ (e.g., 5), and the first layer outputs 6 channels, keeping parameters minimal.
+	\item \textbf{Bottleneck:} The center block contains 96 filters.
+	\item \textbf{Decoder:} Consists of 4 upsampling blocks with skip connections ($48 \to 24 \to 12 \to 6$).
+\end{itemize}
+
+\subsection{Bottleneck Spatial Attention (SA)}
+Since we reduce the spectral information from 25 bands to 5, the model risks losing discriminative power. To compensate, we introduce a Spatial Attention (SA) module in the bottleneck to focus on geometric features. Unlike complex attention mechanisms like CBAM \cite{woo2018cbam} which apply both channel and spatial attention, our module is strictly \textbf{spatial}. This design choice avoids redundant channel re-calibration (since we already performed hard band selection) and saves computational cost.
+
+\begin{figure}[htbp]
+	\centering
+	% Placeholder for Figure 3.3: Spatial Attention
+	\includegraphics[width=\linewidth]{figures/sa_module_600dpi.png}
+	\caption{Diagram of the Bottleneck Spatial Attention (SA) Module. It aggregates channel-wise statistics to learn a spatial importance map.}
+	\label{fig:sa_module}
+\end{figure}
+
+The SA module operates as follows:
+\begin{enumerate}
+	\item \textbf{Aggregation:} Compute Average Pooling and Max Pooling across the channel dimension of the feature map $F$.
+	      $$ F_{avg} = \text{AvgPool}(F), \quad F_{max} = \text{MaxPool}(F) $$
+	\item \textbf{Convolution:} Concatenate these maps and pass them through a $7 \times 7$ convolution layer to capture large-scale spatial context.
+	\item \textbf{Activation:} Apply the Sigmoid function to generate the attention map $A \in [0, 1]$.
+	      $$ A = \sigma(\text{Conv}_{7\times7}([F_{avg}; F_{max}])) $$
+	\item \textbf{Refinement:} Multiply the input feature map by the attention map: $F' = F \odot A$.
+\end{enumerate}
+
+\section{Loss Function and Training Strategy}
+The model is trained using a linear combination of Cross-Entropy Loss and Dice Loss:
+\begin{equation}
+	\mathcal{L}_{total} = \lambda_{CE} \mathcal{L}_{CE} + \lambda_{Dice} \mathcal{L}_{Dice}
+\end{equation}
+While a balanced initialization ($\lambda=0.5$) is a standard baseline, our empirical experiments demonstrated that setting $\lambda_{CE} = 0.6$ and $\lambda_{Dice} = 0.4$ yielded the best segmentation performance, slightly prioritizing pixel-wise classification stability.
+
+To facilitate the transition from continuous exploration to discrete selection, we employ a \textbf{Temperature Annealing Schedule} for the Gumbel-Softmax distribution. During the initial phase of training, the temperature $\tau$ is set to a high value, allowing for a diverse exploration of different band combinations. As training progresses, $\tau$ is exponentially decayed towards a small value (e.g., $0.1$), forcing the selection probabilities to become increasingly ``hard'' and peak at the most discriminative bands. This strategy promotes stable convergence towards a robust and discrete spectral subset.
+
+
+
+----------------------------------------
+File: chapter4_experiments.tex
+----------------------------------------
+\chapter{Experiments and Results}
+\label{chap:experiments}
+
+\section{Experimental Setup}
+
+\subsection{Dataset Description and Preprocessing}
+To validate the effectiveness of the proposed TABS-UNet framework, we utilize the \textbf{HSI-Drive dataset} \cite{hsidrive2021, hsidrive2022hipeac, hsidrive2023jsa}, a large-scale hyperspectral dataset acquired from a driving platform. The dataset captures diverse road scenarios, including urban streets, highways, and rural roads, under various lighting conditions.
+
+\textbf{Dataset Specifications:}
+\begin{itemize}
+	\item \textbf{Data Volume:} The HSI-Drive 2.0 dataset utilized in this study consists of \textbf{752 high-quality hyperspectral images} with pixel-wise semantic annotations. The results reported in this thesis are strictly based on the stable v2.0 release to ensure consistent benchmarking.
+	\item \textbf{Spectral Resolution:} Each image cube contains $C=25$ spectral bands ranging from approximately 564~nm to 956~nm. While the sensor specification is often cited as 600-975~nm \cite{hsidrive2021, hsidrive2022hipeac, hsidrive2023jsa}, the specific calibration data provided with the dataset indicates the exact center wavelengths detailed in Table \ref{tab:wavelengths}.
+	\item \textbf{Data Splitting Method (File-level):} To ensure objective evaluation and prevent data leakage, we employ a strict \textbf{two-stage data preparation protocol}. The splitting is performed at the file level before any patch generation:
+	      \begin{itemize}
+		      \item \textbf{Random Shuffle:} The list of hyperspectral `.mat` files is randomly shuffled using a fixed seed (Default: 42) to guarantee reproducibility.
+		      \item \textbf{Ratio:} The files are partitioned into a \textbf{Training set (80\%)} and a \textbf{Validation set (20\%)}.
+		      \item \textbf{Strict Isolation:} The Validation set serves as the final Test set in this study. It remains strictly ``unseen'' during the backpropagation process to ensure the reported metrics reflect true generalization capability.
+	      \end{itemize}
+	\item \textbf{Patch Generation (Tiling Strategy):} Given the high resolution of HSI-Drive images ($216 \times 409$), we apply a sliding window approach to generate model inputs:
+	      \begin{itemize}
+		      \item \textbf{Configuration:} Images are cropped into patches of size $224 \times 224$ pixels with a stride of $192 \times 192$ pixels.
+		      \item \textbf{Overlap:} The stride ($192 < 224$) creates an overlap between adjacent patches. This increases the training sample density and prevents semantic information loss at the patch boundaries.
+		      \item \textbf{Padding:} We utilize \textbf{Reflection Padding} to extend image boundaries. This ensures all extracted patches meet the $224 \times 224$ spatial requirement without introducing artificial edge artifacts common with zero-padding.
+	      \end{itemize}
+	\item \textbf{Data Augmentation:} We employ distinct preprocessing pipelines for training and inference:
+	      \begin{itemize}
+		      \item \textbf{Training:} To improve generalization, we apply random geometric transformations (Horizontal Flip, Random 90\textdegree{} Rotation) and photometric augmentations (Brightness and Contrast jittering).
+		      \item \textbf{Validation/Test:} No stochastic augmentations are applied. Samples undergo deterministic normalization and tensor conversion only.
+	      \end{itemize}
+\end{itemize}
+
+\begin{table}[htbp]
+	\centering
+	\caption{Mapping of Band Indices to Center Wavelengths (nm) in HSI-Drive (Rounded).}
+	\label{tab:wavelengths}
+	\small
+	\begin{tabular}{cccccc}
+		\toprule
+		\textbf{Index} & \textbf{Wavelength} & \textbf{Index} & \textbf{Wavelength} & \textbf{Index} & \textbf{Wavelength} \\
+		\midrule
+		0              & 564                 & 9              & 796                 & 18             & 912                 \\
+		1              & 679                 & 10             & 808                 & 19             & 921                 \\
+		2              & 693                 & 11             & 827                 & 20             & 929                 \\
+		3              & 718                 & 12             & 849                 & 21             & 936                 \\
+		4              & 732                 & 13             & 859                 & 22             & 944                 \\
+		5              & 744                 & 14             & 869                 & 23             & 950                 \\
+		6              & 758                 & 15             & 879                 & 24             & 956                 \\
+		7              & 771                 & 16             & 888                 &                &                     \\
+		8              & 784                 & 17             & 898                 &                &                     \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=\linewidth]{figures/wavelength_mapping_600dpi.png}
+	\caption{Visual representation of the HSI-Drive spectral bands. The dataset covers both the Visible (VIS) and Near-Infrared (NIR) spectrum.}
+	\label{fig:wavelength_mapping}
+\end{figure}
+
+\textbf{Semantic Class Definitions and Visualization:}
+For the purpose of qualitative analysis and visualization, we define a standardized RGB colormap for the semantic classes. This mapping is consistent across all result images presented in this thesis. The specific RGB values and their corresponding visual representations are detailed in Table \ref{tab:colormap}.
+
+\begin{table}[htbp]
+	\centering
+	\caption{Semantic Class Definitions and Color Coding for Visualization.}
+	\label{tab:colormap}
+	\setlength{\tabcolsep}{12pt}
+	\renewcommand{\arraystretch}{1.3}
+	\begin{tabular}{llcc}
+		\toprule
+		\textbf{Class Name} & \textbf{Description}        & \textbf{RGB Value} & \textbf{Hex Code} \\
+		\midrule
+		\textbf{Road}       & Drivable asphalt surface    & (128, 64, 128)     & \#804080          \\
+		\textbf{Road Marks} & Lane lines, markings        & (255, 255, 0)      & \#FFFF00          \\
+		\textbf{Vegetation} & Trees, grass, bushes        & (107, 142, 35)     & \#6B8E23          \\
+		\textbf{Sky}        & Sky region                  & (70, 130, 180)     & \#4682B4          \\
+		\textbf{Background} & Vehicles, buildings, others & (0, 0, 0)          & \#000000          \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+
+\subsection{Implementation Details}
+All experiments were implemented using the PyTorch framework (v1.10) with CUDA 11.3 on a Linux workstation.
+\begin{itemize}
+	\item \textbf{Training Hardware:} NVIDIA RTX A5000 GPU (24GB VRAM).
+	\item \textbf{Inference Hardware (Edge Test):} Raspberry Pi 4 Model B (8GB RAM).
+	\item \textbf{Optimization:} We used the AdamW optimizer \cite{loshchilov2019adamw} with an initial learning rate of $1 \times 10^{-3}$ and a weight decay of $1 \times 10^{-4}$.
+
+	\item \textbf{Normalization:} All spectral bands were normalized to the $[0, 1]$ range using Min-Max scaling.
+	\item \textbf{Training Strategy:} The models were trained for 400 epochs with a batch size of 8. The Gumbel-Softmax temperature $\tau$ was annealed exponentially from $5.0$ to $0.1$ during the first 100 epochs to transition from exploration (soft selection) to exploitation (hard selection).
+\end{itemize}
+
+\section{Quantitative Evaluation}
+
+\subsection{Comparison with State-of-the-Art Methods}
+We compare TABS-UNet with three categories of baseline methods to evaluate its position in the Accuracy-Efficiency trade-off. We utilize the exact same protocol as the preliminary study, comparing against Full-band U-Net and various band selection strategies including Random selection, statistical filters (Entropy, Fisher Score, Correlation, and Spectral Angle Distance (SAD)), and wrapper methods (SVM-RFE).
+
+Table \ref{tab:performance_comparison} presents the comprehensive results on the HSI-Drive v2.0 dataset. We report the Mean Intersection over Union (mIoU) alongside computational efficiency metrics (GFLOPs and Parameters).
+
+\begin{table}[htbp]
+	\centering
+	\caption{Overall performance and efficiency comparison. Note: Efficiency metrics are normalized as mIoU per GFLOPs and mIoU per Million Params.}
+	\label{tab:performance_comparison}
+	\scriptsize
+	\setlength{\tabcolsep}{3.5pt}
+	\begin{tabular}{lccccccc}
+		\toprule
+		\multirow{2}{*}{Model}    & \multirow{2}{*}{Bands} & \multirow{2}{*}{Steps} & \multirow{2}{*}{GFLOPs} & \multirow{2}{*}{Params (M)} & \multirow{2}{*}{mIoU} & \multicolumn{2}{c}{Efficiency}                  \\
+		\cmidrule(lr){7-8}
+		                          &                        &                        &                         &                             &                       & mIoU/GFLOPs                    & mIoU/M Params  \\
+		\midrule
+		Full-Band U-Net           & 25                     & 1                      & 19.61                   & 31.27                       & \textbf{0.823}        & 0.042                          & 0.026          \\
+		\midrule
+		U-Net + Random (avg)      & 5                      & 2                      & 1.02                    & 0.27                        & 0.729                 & 0.715                          & 2.700          \\
+		U-Net + Entropy           & 5                      & 2                      & 1.02                    & 0.27                        & 0.746                 & 0.731                          & 2.763          \\
+		U-Net + Fisher Score      & 5                      & 2                      & 1.02                    & 0.27                        & 0.749                 & 0.734                          & 2.774          \\
+		U-Net + Correlation       & 5                      & 2                      & 1.02                    & 0.27                        & 0.750                 & 0.735                          & 2.778          \\
+		U-Net + SAD               & 5                      & 2                      & 1.02                    & 0.27                        & 0.753                 & 0.738                          & 2.789          \\
+		U-Net + SVM-RFE           & 5                      & 2                      & 1.02                    & 0.27                        & 0.757                 & 0.742                          & 2.804          \\
+		\midrule
+		\textbf{TABS-UNet (Ours)} & \textbf{5}             & \textbf{1}             & \textbf{1.02}           & \textbf{0.27}               & \textbf{0.763}        & \textbf{0.748}                 & \textbf{2.826} \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\textbf{Analysis:}
+The results demonstrate that TABS-UNet achieves an mIoU of \textbf{0.763}, significantly outperforming statistical methods like Entropy (0.746) and Random selection (0.729). Compared to the strong wrapper baseline SVM-RFE (0.757), our method achieves higher accuracy while enabling a unified, single-step inference pipeline.
+
+\textbf{Feasibility on Edge Hardware:}
+Crucially, while the Full-Band U-Net achieves the highest theoretical accuracy (0.823), it is \textbf{physically undeployable} on the Raspberry Pi 4 due to Out-of-Memory (OOM) errors caused by the massive intermediate feature maps of the 25-band input. TABS-UNet, by reducing the input to 5 bands, not only fits within the 8GB RAM constraint but also achieves the highest efficiency score (2.826 mIoU/M), representing the only viable solution for standalone edge processing among the high-accuracy candidates.
+
+\subsection{Ablation on Loss Function Design}
+To validate the effectiveness of our training strategy, we analyze the impact of the loss function components. As shown in Table \ref{tab:ablation_loss}, training with Cross-Entropy (CE) loss alone results in suboptimal performance.
+
+\begin{table}[htbp]
+	\centering
+	\caption{Ablation study of the Loss function.}
+	\label{tab:ablation_loss}
+	\small
+	\begin{tabular}{llc}
+		\toprule
+		Case & Variant                             & mIoU           \\
+		\midrule
+		(a)  & CE loss only (no Dice)              & 0.748          \\
+		(b)  & \textbf{Full TABS-UNet (Dice + CE)} & \textbf{0.763} \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+The hybrid loss (Dice + CE) improves mIoU from 0.748 to 0.763, confirming that maximizing region overlap is crucial for sparse spectral data learning.
+
+\section{Analysis of Learned Spectral Bands}
+\label{sec:band_analysis}
+
+A key contribution of this work is the interpretability of the learned bands. Unlike ``Black-box'' feature extractors (like PCA), TABS selects specific physical wavelengths. Figure \ref{fig:band_barcode} visualizes the bands selected by different methods.
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=\linewidth]{figures/band_selection_barcode_600dpi.png}
+	\caption{Comparison of Top-5 Selected Bands. Entropy selects bands clustered in the Red Edge and Early NIR region (Blue), while TABS (Red) selects a broader range extending into the Deep NIR, maximizing the spectral contrast.}
+	\label{fig:band_barcode}
+\end{figure}
+
+\begin{table}[htbp]
+	\centering
+	\caption{Comparison of Top-5 Selected Band Indices by Different Methods.}
+	\label{tab:band_comparison}
+	\small
+	\begin{tabular}{lcl}
+		\toprule
+		\textbf{Method}      & \textbf{Selected Indices (0-24)} & \textbf{Spectral Region Characteristics}      \\
+		\midrule
+		\textbf{Entropy}     & \{2, 6, 7, 8, 11\}               & Red Edge + Early NIR (Highly Correlated)      \\
+		\textbf{SAD (Proxy)} & \{5, 6, 7, 8, 11\}               & Red Edge + Early NIR (High Energy)            \\
+		\textbf{SVM-RFE}     & \{4, 13, 15, 17, 18\}            & Inconsistent Coverage                         \\
+		\textbf{TABS (Ours)} & \textbf{\{2, 6, 18, 22, 24\}}    & \textbf{Red Edge Bounds + Deep NIR (Optimal)} \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\textbf{Interpretation:}
+\begin{itemize}
+	\item \textbf{Limitations of Entropy:} Statistical methods like Entropy prioritize bands with high variance. As seen in Table \ref{tab:band_comparison}, Entropy clusters its selection in the ``Early NIR'' region (Indices 7, 8, 11 correspond to 770-826nm). While these bands have high signal strength, they are highly correlated (redundant) and fail to capture the discriminative ``Deep NIR'' features required for robust segmentation.
+	\item \textbf{TABS Strategy:} TABS-UNet selects a more spectrally diverse set of bands. It picks the start and peak of the Red Edge (Indices 2 and 6) and extends into the Deep NIR region (Indices 18, 22, 24 correspond to >912nm). This broad coverage ensures that the model captures both the sharp reflectance rise of vegetation and its sustained plateau, maximizing the contrast against the road surface.
+\end{itemize}
+
+
+\section{Stability and Robustness}
+
+To evaluate the stochastic stability of the proposed framework, we performed a robustness analysis across 5 random initialization seeds (Seeds: 42, 101, 25873, 61684, 36760).
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=0.8\linewidth]{figures/stability_multi_k_boxplots_600dpi.png}
+	\caption{Boxplot comparison of mIoU distribution across 5 random seeds. TABS-UNet ($k=5$) demonstrates a more compact distribution with higher median accuracy compared to SVM-RFE, validating its robustness against initialization randomness.}
+	\label{fig:stability}
+\end{figure}
+
+As depicted in Figure \ref{fig:stability}, TABS-UNet exhibits a constrained Interquartile Range (IQR) positioned at a higher accuracy level compared to the baselines. In contrast, wrapper methods such as SVM-RFE display a larger variance, indicated by the extended whiskers. This stability is attributed to the Gumbel-Softmax noise injection, which effectively acts as a regularizer, mitigating the risk of the model collapsing into local optima during the discrete band selection process.
+
+\section{Sensitivity Analysis of \texorpdfstring{$k$}{k}}
+
+A critical hyperparameter in our framework is $k$, the number of selected bands. We evaluated the model performance with $k \in \{3, 5, 7\}$.
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=0.9\linewidth]{figures/sensitivity_k_analysis_best_600dpi.png}
+	\caption{Sensitivity analysis of mIoU with respect to the number of selected bands ($k$).}
+	\label{fig:sensitivity}
+\end{figure}
+
+Figure \ref{fig:sensitivity} reveals an ``elbow point'' at $k=5$. Increasing $k$ from 3 to 5 yields a significant performance boost (from $\approx 0.755$ to $0.763$). However, further increasing $k$ to 7 provides only marginal gains ($<0.5\%$) while increasing computational cost by 40\%. Therefore, $k=5$ represents the optimal trade-off between accuracy and efficiency for edge deployment.
+
+
+\section{Qualitative Results}
+
+Figure \ref{fig:qualitative} visualizes the segmentation results. The colors correspond to the definitions in Table \ref{tab:colormap} (Road: Purple, Vegetation: Green).
+
+\begin{figure}[htbp]
+	\centering
+	% [OFFICE PAPER FIGURE 3 - QUALITATIVE RESULTS]
+	\includegraphics[width=0.95\linewidth]{figures/results-hai.png}
+	\caption{Qualitative comparison of segmentation predictions on the HSI-Drive dataset. From left to right: Pseudo RGB, Ground Truth, and predictions from baseline models vs. TABS-UNet. Note that TABS-UNet accurately preserves road boundaries even in challenging lighting conditions. (Road: Purple, Vegetation: Green)}
+	\label{fig:qualitative}
+\end{figure}
+
+
+It can be observed that statistical methods (Entropy) often fail in shadow regions (misclassifying shadowed road as vegetation). TABS-UNet, by selecting NIR bands that penetrate shadows effectively, maintains robust segmentation of the road surface (Purple area) even under tree canopies.
+
+\section{Ablation Study: Effectiveness of Spatial Attention}
+
+We further analyze the impact of the SA module.
+
+\begin{table}[htbp]
+	\centering
+	\caption{Impact of the Bottleneck Spatial Attention (SA) module on performance ($k=5$).}
+	\label{tab:ablation_sa}
+	\begin{tabular}{lc}
+		\toprule
+		\textbf{Model Variant}       & \textbf{mIoU}  \\
+		\midrule
+		TABS-UNet (without SA)       & 0.751          \\
+		\textbf{TABS-UNet (with SA)} & \textbf{0.763} \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+Table \ref{tab:ablation_sa} shows that removing the SA module results in a 1.3\% drop in mIoU. Since we drastically reduce the spectral information (from 25 to 5 bands), the spatial attention mechanism becomes critical. It allows the network to focus on informative spatial features—such as road boundaries and lane geometry—to compensate for the loss of spectral detail.
+
+
+\section{Computational Efficiency}
+
+Finally, we evaluate the real-world deployment feasibility of the proposed framework. We measure the inference speed on a \textbf{Raspberry Pi 4 Model B (8GB RAM)}, representing a typical low-cost edge computing platform for autonomous delivery robots or agricultural drones. The models are quantized to INT8 using the QNNPACK backend to maximize throughput.
+
+\textbf{Deployment Strategy:}
+It is important to note that the complex Gumbel-Softmax mechanism described in Chapter \ref{chap:method} is utilized \textit{only during training}. For deployment, the learned band indices are frozen (specifically indices 2, 6, 18, 22, and 24). Consequently, the ``band selection'' step becomes a simple static slicing operation with negligible computational cost ($\approx 2$ ms). Therefore, we report the total system performance in terms of Frames Per Second (FPS).
+
+Table \ref{tab:quantization_speedup} presents the comprehensive comparison of accuracy and speed on the edge hardware.
+
+\begin{table}[htbp]
+	\centering
+	\caption{Comprehensive Comparison of Accuracy and Speed on Raspberry Pi 4 (INT8). Note: The Full-Band model fails to run on the edge device due to Out-of-Memory (OOM) errors.}
+	\label{tab:quantization_speedup}
+	\setlength{\tabcolsep}{6pt}
+	\begin{tabular}{lcccc}
+		\toprule
+		\textbf{Method}              & \textbf{Bands} & \textbf{mIoU}  & \textbf{Latency}      & \textbf{FPS}         \\
+		\midrule
+		\multicolumn{5}{l}{\textit{\textbf{Reference (Upper Bound)}}}                                                 \\
+		Full-Band U-Net              & 25             & \textbf{0.823} & N/A                   & \textbf{0.00 (OOM)}  \\
+		\midrule
+		\multicolumn{5}{l}{\textit{\textbf{Conventional Methods (Static Selection)}}}                                 \\
+		\textit{Average Performance} & \textit{5}     & \textit{0.751} & \textit{$\sim$ 50 ms} & \textit{$\sim$ 20.1} \\
+		\quad SAD                    & 5              & 0.753          & 50.5 ms               & 19.80                \\
+		\quad Entropy                & 5              & 0.746          & 49.8 ms               & 20.10                \\
+		\quad Fisher                 & 5              & 0.749          & 49.5 ms               & 20.20                \\
+		\quad SVM-RFE                & 5              & 0.757          & 48.8 ms               & 20.50                \\
+		\midrule
+		\multicolumn{5}{l}{\textit{\textbf{Proposed Method}}}                                                         \\
+		\textbf{TABS-UNet (Ours)}    & \textbf{5}     & \textbf{0.763} & \textbf{61.4 ms}      & \textbf{16.28}       \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\textbf{Analysis of Results:}
+
+\begin{enumerate}
+	\item \textbf{The Memory Barrier (Full-Band):} The most critical finding is that the Full-Band U-Net, despite its high theoretical accuracy (0.823 mIoU), is \textbf{physically undeployable} on the Raspberry Pi 4. The 25-channel input generates massive intermediate feature maps that exceed the device's available memory, resulting in Out-of-Memory (OOM) crashes. This validates the fundamental premise of this thesis: dimensionality reduction is not optional, but mandatory for edge HSI.
+
+	\item \textbf{Accuracy vs. Speed Trade-off:}
+	\begin{itemize}
+		\item \textbf{Static Methods (Task-Agnostic):} Methods like Entropy and SAD achieve higher speeds ($\approx 20$ FPS). This is because they use a standard U-Net backbone without additional modules. However, their reliance on statistical variance rather than semantic importance leads to lower accuracy (Avg: 0.751 mIoU).
+		\item \textbf{TABS-UNet (Task-Aware):} Our method operates at \textbf{16.28 FPS}, which is approximately 19\% slower than the static baselines. This increased latency is attributed to the \textbf{Bottleneck Spatial Attention (SA)} module. However, this trade-off is highly favorable: by investing a few milliseconds in spatial refinement, we gain a significant boost in accuracy (0.763 mIoU), outperforming all other dimensionality reduction techniques.
+	\end{itemize}
+\end{enumerate}
+
+
+----------------------------------------
+File: chapter5_discussion.tex
+----------------------------------------
+\chapter{Discussion}
+\label{chap:discussion}
+
+In this chapter, we provide a deeper analysis of the results presented in Chapter \ref{chap:experiments}. Beyond the raw numerical improvements, we discuss the fundamental advantages of discrete band selection over latent feature extraction, interpret the physical significance of the learned spectral bands, and evaluate the architectural trade-offs between Convolutional Neural Networks (CNNs) and emerging Transformer models for edge-based hyperspectral segmentation.
+
+\section{Discrete Selection vs. Latent Projection}
+\label{sec:discrete_vs_latent}
+
+One of the central questions in hyperspectral dimensionality reduction is the choice between \textbf{Feature Selection} (keeping a subset of original bands) and \textbf{Feature Extraction} (projecting data into a new lower-dimensional subspace, e.g., PCA or Autoencoders).
+
+While methods like Principal Component Analysis (PCA) or standard Autoencoders often maximize information retention (minimizing reconstruction error), they suffer from a critical limitation in practical hardware deployment: \textbf{Loss of Physical Meaning}.
+\begin{itemize}
+	\item In a PCA-based approach, the first principal component is a linear combination of all original bands (e.g., $PC_1 = 0.5 \cdot \lambda_1 + 0.3 \cdot \lambda_2 + \dots$). This requires the sensor to capture \textit{all} wavelengths first, then compute the projection in software. This negates the benefits of hardware acceleration, as the data bottleneck at the sensor-to-memory interface remains unchanged.
+	\item In contrast, the \textbf{TABS-UNet} framework performs \textbf{Discrete Hard Selection}. By identifying exactly which specific wavelengths (e.g., 680~nm, 850~nm) are discriminative, this method enables \textbf{Sensor Co-design}. Theoretically, a custom multispectral camera could be manufactured, equipped with physical optical filters corresponding only to the bands learned by TABS. This would physically reduce the data volume \textit{before} signal digitization, reducing bandwidth requirements, power consumption, and heat generation at the hardware level.
+\end{itemize}
+
+Therefore, although Concrete Autoencoders \cite{abid2019concrete} and our TABS method both use Gumbel-Softmax relaxation, the application of this technique to a \textit{supervised segmentation task} rather than unsupervised reconstruction helps optimize the selected physical bands specifically for maximizing the distinctiveness between road and background classes.
+
+\section{Physical Interpretability of Learned Bands}
+\label{sec:interpretability}
+
+A major advantage of our TABS framework is its ability to uncover physically meaningful features from the hyperspectral data. Unlike black-box deep learning models, the bands selected by TABS can be mapped directly to the physical properties of the materials in the scene.
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=\linewidth]{figures/spectral_signature_analysis_600dpi.png}
+	\caption{Spectral signature analysis of Road vs. Vegetation. The red vertical zones indicate the bands selected by TABS ($k=5$). The model explicitly targets the ``Red Edge'' region (Contrast between Red and NIR) to maximize class separability.}
+	\label{fig:spectral_analysis}
+\end{figure}
+
+As shown in Figure \ref{fig:spectral_analysis}, we plot the average spectral signatures of the ``Road'' and ``Vegetation'' classes.
+\begin{itemize}
+	\item \textbf{Normalized Reflectance:} The y-axis represents the normalized reflectance intensity (scaled to $[0, 1]$). A high value indicates strong reflection, while a low value indicates absorption.
+	\item \textbf{The ``Red Edge'' Phenomenon:} Vegetation (Green line) exhibits a unique characteristic known as the ``Red Edge,'' where reflectance rises sharply between 718nm and 758nm (Indices 3-6) and stays high in the Near-Infrared (NIR) region. In contrast, Road surfaces (Purple line) have a relatively flat and low reflectance profile in the NIR region.
+	\item \textbf{Optimal Selection (Contrast Maximization):} As detailed in Figure \ref{fig:spectral_analysis}, TABS explicitly targets the transition points of the Red Edge to maximize spectral contrast ($|Ref_{veg} - Ref_{road}| \approx 0.6$):
+	      \begin{itemize}
+		      \item \textbf{Visible/Red Edge Start:} The model selects Index 2 (693nm), which corresponds to the absorption trough/start of the Red Edge, providing a low reflectance baseline for vegetation.
+		      \item \textbf{Red Edge Shoulder (NIR Start):} It selects Index 6 (758nm). Consistent with the standard definition of NIR ($>700$nm), this band captures the peak reflectance at the beginning of the NIR spectrum (``Shoulder'').
+		      \item \textbf{Deep NIR Region (Plateau):} The model selects Indices 18 (912nm), 22 (944nm), and 24 (956nm), confirming the high reflectance plateau of vegetation in the deep NIR spectrum.
+	      \end{itemize}
+	      By combining these specific wavelengths, the model effectively replicates the principle of the Normalized Difference Vegetation Index (NDVI) \cite{rouse1973monitoring}, using the high contrast to robustly separate road surfaces from organic obstacles.
+\end{itemize}
+
+This explains why statistical methods like Entropy fail. High entropy bands (e.g., Band 7 or 11) often correspond to noisy regions of the spectrum where the pixel values fluctuate randomly. While mathematically ``informative'' (high variance), they lack the semantic discriminability required for the segmentation task.
+
+Furthermore, unlike wrapper methods (SVM-RFE) which rely on a disconnected two-stage process (train SVM $\to$ select bands $\to$ retrain U-Net), TABS is \textbf{End-to-End Task-Aware}. The band selection weights are updated directly by the segmentation loss gradients. This ensures that the selected bands are not just individually discriminative, but specifically complementary to the convolutional filters of the U-Net, leading to superior joint optimization.
+
+
+\section{CNNs vs. Transformers on the Edge}
+
+The recent trend in computer vision has shifted heavily towards Vision Transformers (ViTs). In the hyperspectral domain, models like SpectralFormer \cite{hong2021spectralformer} utilize self-attention to model global spectral dependencies. While effective on server-grade GPUs, our experiments demonstrate their unsuitability for edge robotics.
+
+\begin{itemize}
+	\item \textbf{Computational Complexity:} The self-attention mechanism scales quadratically $O(N^2)$ with the sequence length (number of bands or pixels). For a 25-band input, this is manageable, but the memory footprint for calculating attention maps often exceeds the limited shared system memory of embedded devices (e.g., 4GB/8GB on Raspberry Pi 4 Model B).
+	\item \textbf{Inductive Bias:} CNNs have a strong inductive bias for locality and translation invariance. In road segmentation, local features (edges, curbs, lane markings) are paramount. A lightweight U-Net captures these local dependencies efficiently with $O(N)$ complexity.
+\end{itemize}
+
+Our results show that TABS-UNet achieves an ``Optimal Trade-off'': it offers the \textbf{task-aware flexibility} of advanced deep learning models while maintaining the \textbf{inference speed} of simple statistical filters. The achievement of \textbf{16.28 FPS} on a Raspberry Pi 4 validates the feasibility of deploying hyperspectral perception on low-cost delivery robots or agricultural drones, where heavy GPUs are prohibitive due to power constraints.
+
+\section{Limitations}
+
+Despite the promising results, our current framework has several limitations:
+\begin{enumerate}
+	\item \textbf{Static Selection:} TABS learns a global set of best bands for the entire dataset. However, the optimal bands might change dynamically based on the environment (e.g., a tunnel might require different bands than a sunny forest). The current model fixes the bands after training.
+	\item \textbf{Fixed $k$:} The number of bands $k$ is a hyperparameter that must be manually defined before training. An ideal system would dynamically adjust $k$ based on the difficulty of the scene (using fewer bands for simple highways and more for complex intersections).
+\end{enumerate}
+
+These limitations define the roadmap for future research, which will be outlined in the concluding chapter.
+
+
+----------------------------------------
+File: chapter6_conclusion.tex
+----------------------------------------
+\chapter{Conclusion and Future Work}
+\label{chap:conclusion}
+
+\section{Conclusion}
+
+This thesis addressed the critical challenge of deploying hyperspectral semantic segmentation on resource-constrained autonomous driving platforms. We identified that the primary bottleneck in existing systems is the trade-off between the rich material information provided by HSI and the prohibitive computational cost associated with processing high-dimensional data cubes. Through our research, we addressed this bottleneck, achieving a segmentation accuracy of \textbf{0.763 mIoU} while reducing the model size to just \textbf{0.27M parameters} with an inference throughput of \textbf{16.28 FPS} on a Raspberry Pi 4 Model B.
+
+To bridge this gap, we proposed \textbf{TABS-UNet}, a unified framework that integrates a learnable band selection mechanism directly into a lightweight segmentation network. Through rigorous theoretical formulation and extensive experimental validation on the HSI-Drive dataset, we have demonstrated the following key findings:
+
+\begin{enumerate}
+	\item \textbf{Efficiency via Hard Selection:} By utilizing the Gumbel-Softmax distribution with the Straight-Through Estimator (STE), TABS-UNet successfully learns to select a discrete subset of $k=5$ spectral bands from the original 25. This results in a massive parameter reduction (from 31.27M to 0.27M) compared to full-band models, enabling inference speeds of \textbf{16.28 FPS on representative edge hardware (Raspberry Pi 4)}, validating the architectural efficiency for real-time applications.
+
+	\item \textbf{Superiority over Statistical Methods:} Our results demonstrate that Task-Aware learning outperforms Task-Agnostic statistics. TABS-UNet achieves an mIoU of \textbf{0.763}, significantly surpassing statistical filter methods (Entropy: 0.746) and wrapper methods (SVM-RFE: 0.757). This indicates that selecting bands based on semantic task performance yields better discriminability than variance-based metrics.
+
+	\item \textbf{Stability and Interpretability:} Unlike wrapper methods (SVM-RFE) which suffer from high variance depending on initialization, TABS-UNet demonstrates robust stability across multiple random seeds. Furthermore, the learned bands consistently cluster in the Near-Infrared (NIR) region, validating the model's ability to capture physical properties (such as the red-edge of vegetation) essential for road scene understanding.
+\end{enumerate}
+
+In summary, TABS-UNet provides a scientifically grounded and practically viable solution for bringing the material-sensing capabilities of hyperspectral imaging to the edge of the network.
+
+\section{Future Work}
+
+While this thesis presents a solid foundation, several avenues for future research remain:
+
+\subsection{Dynamic Instance-Level Band Selection}
+Currently, TABS learns a \textit{static} set of bands that is global for the entire dataset. However, different lighting conditions (sunny vs. overcast) or different scenes (tunnel vs. forest) may require different spectral bands for optimal visibility. Future work could explore \textbf{Dynamic Band Selection}, where a lightweight controller network predicts the optimal $k$ bands on-the-fly for each individual input frame or even for specific image regions (pixel-wise selection).
+
+\subsection{Hardware Co-Design and FPGA Implementation}
+The discrete nature of our band selection opens the door for dedicated hardware implementation. Instead of using a full hyperspectral camera and discarding bands in software, we propose designing a custom multispectral camera with physical optical filters corresponding to the 5 bands identified by TABS. Additionally, implementing the lightweight U-Net logic on a Field-Programmable Gate Array (FPGA) could further reduce latency to under 10~ms, meeting the strict safety requirements of high-speed autonomous driving.
+
+\subsection{Integration with LiDAR}
+While HSI provides chemical information, it lacks geometric depth. A multi-modal fusion approach combining the learned spectral bands from TABS with LiDAR point clouds could provide a holistic perception system, leveraging the texture/material sensing of HSI and the precise distance measurement of LiDAR.
+

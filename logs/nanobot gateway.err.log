@@ -1,0 +1,104 @@
+2026-03-13 19:52:03.141 | INFO     | nanobot.channels.manager:_init_channels:48 - Telegram channel enabled
+2026-03-13 19:52:03.153 | INFO     | nanobot.cron.service:_load_store:83 - Cron: jobs.json modified externally, reloading
+2026-03-13 19:52:03.193 | INFO     | nanobot.cron.service:start:182 - Cron service started with 4 jobs
+2026-03-13 19:52:03.194 | INFO     | nanobot.heartbeat.service:start:119 - Heartbeat started (every 1800s)
+2026-03-13 19:52:03.195 | INFO     | nanobot.agent.loop:run:254 - Agent loop started
+2026-03-13 19:52:03.195 | INFO     | nanobot.channels.manager:start_all:81 - Starting telegram channel...
+2026-03-13 19:52:03.196 | INFO     | nanobot.channels.manager:_dispatch_outbound:109 - Outbound dispatcher started
+2026-03-13 19:52:03.230 | INFO     | nanobot.channels.telegram:start:237 - Starting Telegram bot (polling mode)...
+2026-03-13 19:52:04.283 | INFO     | nanobot.channels.telegram:start:247 - Telegram bot @claw_rtx2080ti_bot connected
+2026-03-13 19:52:04.703 | DEBUG    | nanobot.channels.telegram:start:251 - Telegram bot commands registered
+2026-03-13 19:52:30.817 | DEBUG    | nanobot.channels.telegram:_on_message:671 - Telegram message from 1182384125: gọi subagent tìm kiếm tóm tắt về picoclaw...
+2026-03-13 19:52:30.818 | INFO     | nanobot.agent.loop:_process_message:367 - Processing message from telegram:1182384125: gọi subagent tìm kiếm tóm tắt về picoclaw
+2026-03-13 19:52:31.404 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 13036/65536 via tiktoken
+2026-03-13 19:52:38.292 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: spawn({"task": "zeroclaw agent -p custom --model gemini-3-flash-preview -m \"Tìm kiếm và tóm tắt thông tin về 'picoclaw'. Tập trung vào các khía cạnh như mục đích, công nghệ, và ứng dụng chính.\""})
+2026-03-13 19:52:38.292 | INFO     | nanobot.agent.subagent:spawn:78 - Spawned subagent [f5da8ef3]: zeroclaw agent -p custom --mod...
+2026-03-13 19:52:38.296 | INFO     | nanobot.agent.subagent:_run_subagent:89 - Subagent [f5da8ef3] starting task: zeroclaw agent -p custom --mod...
+2026-03-13 19:52:40.129 | DEBUG    | nanobot.agent.subagent:_run_subagent:143 - Subagent [f5da8ef3] executing: web_search with arguments: {"query": "picoclaw purpose technology applications"}
+2026-03-13 19:52:40.444 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 13137/65536 via tiktoken
+2026-03-13 19:52:40.444 | INFO     | nanobot.agent.loop:_process_message:444 - Response to telegram:1182384125: Đã gọi subagent để tìm kiếm và tóm tắt thông tin về "picoclaw". Tôi sẽ thông báo cho Su khi có kết quả.
+2026-03-13 19:52:46.623 | INFO     | nanobot.agent.subagent:_run_subagent:158 - Subagent [f5da8ef3] completed successfully
+2026-03-13 19:52:46.623 | DEBUG    | nanobot.agent.subagent:_announce_result:196 - Subagent [f5da8ef3] announced result to telegram:1182384125
+2026-03-13 19:52:46.623 | INFO     | nanobot.agent.loop:_process_message:349 - Processing system message from subagent
+2026-03-13 19:52:46.871 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 13137/65536 via tiktoken
+2026-03-13 19:52:50.089 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14125/65536 via tiktoken
+2026-03-13 19:57:24.174 | INFO     | nanobot.channels.manager:_init_channels:48 - Telegram channel enabled
+2026-03-13 19:57:24.183 | INFO     | nanobot.cron.service:_load_store:83 - Cron: jobs.json modified externally, reloading
+2026-03-13 19:57:24.223 | INFO     | nanobot.cron.service:start:182 - Cron service started with 4 jobs
+2026-03-13 19:57:24.224 | INFO     | nanobot.heartbeat.service:start:119 - Heartbeat started (every 1800s)
+2026-03-13 19:57:24.224 | INFO     | nanobot.agent.loop:run:254 - Agent loop started
+2026-03-13 19:57:24.225 | INFO     | nanobot.channels.manager:start_all:81 - Starting telegram channel...
+2026-03-13 19:57:24.225 | INFO     | nanobot.channels.manager:_dispatch_outbound:109 - Outbound dispatcher started
+2026-03-13 19:57:24.258 | INFO     | nanobot.channels.telegram:start:237 - Starting Telegram bot (polling mode)...
+2026-03-13 19:57:25.287 | INFO     | nanobot.channels.telegram:start:247 - Telegram bot @claw_rtx2080ti_bot connected
+2026-03-13 19:57:25.705 | DEBUG    | nanobot.channels.telegram:start:251 - Telegram bot commands registered
+2026-03-13 19:57:48.363 | DEBUG    | nanobot.channels.telegram:_on_message:671 - Telegram message from 1182384125: có subagent không...
+2026-03-13 19:57:48.364 | INFO     | nanobot.agent.loop:_process_message:367 - Processing message from telegram:1182384125: có subagent không
+2026-03-13 19:57:48.915 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14125/65536 via tiktoken
+2026-03-13 19:57:52.907 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14221/65536 via tiktoken
+2026-03-13 19:57:52.907 | INFO     | nanobot.agent.loop:_process_message:444 - Response to telegram:1182384125: Có, tôi có sử dụng các subagent. Tôi hoạt động như một CEO/Orchestrator, phân chia các nhiệm vụ phức tạp thành các subag...
+2026-03-13 19:57:59.127 | DEBUG    | nanobot.channels.telegram:_on_message:671 - Telegram message from 1182384125: picoclaw ấy...
+2026-03-13 19:57:59.128 | INFO     | nanobot.agent.loop:_process_message:367 - Processing message from telegram:1182384125: picoclaw ấy
+2026-03-13 19:57:59.346 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14221/65536 via tiktoken
+2026-03-13 19:58:02.302 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14368/65536 via tiktoken
+2026-03-13 19:58:02.303 | INFO     | nanobot.agent.loop:_process_message:444 - Response to telegram:1182384125: À, Su đang hỏi về PicoClaw. PicoClaw là một trợ lý AI cá nhân siêu nhẹ, được thiết kế để hoạt động độc lập trên các thiế...
+2026-03-13 19:58:22.759 | DEBUG    | nanobot.channels.telegram:_on_message:671 - Telegram message from 1182384125: picoclaw có subagent không...
+2026-03-13 19:58:22.761 | INFO     | nanobot.agent.loop:_process_message:367 - Processing message from telegram:1182384125: picoclaw có subagent không
+2026-03-13 19:58:22.984 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14368/65536 via tiktoken
+2026-03-13 19:58:26.221 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14527/65536 via tiktoken
+2026-03-13 19:58:26.221 | INFO     | nanobot.agent.loop:_process_message:444 - Response to telegram:1182384125: PicoClaw được thiết kế như một trợ lý AI cá nhân siêu nhẹ, hoạt động hiệu quả trên các thiết bị tài nguyên hạn chế. Nó k...
+2026-03-13 20:00:09.478 | DEBUG    | nanobot.channels.telegram:_on_message:671 - Telegram message from 1182384125: subagent phân tích so sánh các loại claw đi...
+2026-03-13 20:00:09.479 | INFO     | nanobot.agent.loop:_process_message:367 - Processing message from telegram:1182384125: subagent phân tích so sánh các loại claw đi
+2026-03-13 20:00:09.664 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14527/65536 via tiktoken
+2026-03-13 20:00:24.836 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: spawn({"task": "zeroclaw agent -p custom --model gemini-3-pro-preview -m \"Phân tích và so sánh các loại 'Claw' sau: PicoClaw, ZeroClaw, OpenClaw, SkyClaw, và Nanobot (Pi/Nanobot-RS). Tập trung vào mục đích)
+2026-03-13 20:00:24.837 | INFO     | nanobot.agent.subagent:spawn:78 - Spawned subagent [c47b7cf9]: zeroclaw agent -p custom --mod...
+2026-03-13 20:00:24.848 | INFO     | nanobot.agent.subagent:_run_subagent:89 - Subagent [c47b7cf9] starting task: zeroclaw agent -p custom --mod...
+2026-03-13 20:00:27.117 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14622/65536 via tiktoken
+2026-03-13 20:00:27.118 | INFO     | nanobot.agent.loop:_process_message:444 - Response to telegram:1182384125: Đã gọi subagent để phân tích và so sánh các loại "Claw" khác nhau. Tôi sẽ thông báo cho Su khi có kết quả.
+2026-03-13 20:00:28.009 | DEBUG    | nanobot.agent.subagent:_run_subagent:143 - Subagent [c47b7cf9] executing: web_search with arguments: {"query": "PicoClaw purpose technology advantages disadvantages use cases"}
+2026-03-13 20:00:33.645 | DEBUG    | nanobot.agent.subagent:_run_subagent:143 - Subagent [c47b7cf9] executing: web_fetch with arguments: {"url": "https://medium.com/@SyedAbbasT/picoclaw-the-ultra-lightweight-ai-assistant-that-runs-on-almost-anything-95116efca070"}
+2026-03-13 20:00:36.918 | DEBUG    | nanobot.agent.subagent:_run_subagent:143 - Subagent [c47b7cf9] executing: web_search with arguments: {"query": "ZeroClaw purpose technology advantages disadvantages use cases"}
+2026-03-13 20:00:41.117 | DEBUG    | nanobot.agent.subagent:_run_subagent:143 - Subagent [c47b7cf9] executing: web_fetch with arguments: {"url": "https://sparkco.ai/blog/openclaw-vs-zeroclaw-which-ai-agent-framework-should-you-choose-in-2026"}
+2026-03-13 20:01:01.237 | DEBUG    | nanobot.agent.tools.web:_fetch_jina:269 - Jina Reader failed for https://sparkco.ai/blog/openclaw-vs-zeroclaw-which-ai-agent-framework-should-you-choose-in-2026, falling back to readability: 
+2026-03-13 20:01:45.225 | INFO     | nanobot.agent.subagent:_run_subagent:158 - Subagent [c47b7cf9] completed successfully
+2026-03-13 20:01:45.226 | DEBUG    | nanobot.agent.subagent:_announce_result:196 - Subagent [c47b7cf9] announced result to telegram:1182384125
+2026-03-13 20:01:45.226 | INFO     | nanobot.agent.loop:_process_message:349 - Processing system message from subagent
+2026-03-13 20:01:45.548 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14622/65536 via tiktoken
+2026-03-13 20:01:48.121 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14849/65536 via tiktoken
+2026-03-13 20:02:44.649 | DEBUG    | nanobot.channels.telegram:_on_message:671 - Telegram message from 1182384125: 2026-03-13 20:00:27.117 | DEBUG    | nanobot.agent...
+2026-03-13 20:02:44.650 | INFO     | nanobot.agent.loop:_process_message:367 - Processing message from telegram:1182384125: 2026-03-13 20:00:27.117 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_t...
+2026-03-13 20:02:44.851 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 14849/65536 via tiktoken
+2026-03-13 20:02:49.738 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: web_search({"query": "PicoClaw purpose technology advantages disadvantages use cases"})
+2026-03-13 20:02:54.138 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: web_fetch({"url": "https://medium.com/@SyedAbbasT/picoclaw-the-ultra-lightweight-ai-assistant-that-runs-on-almost-anything-95116efca070"})
+2026-03-13 20:02:57.321 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: web_search({"query": "ZeroClaw purpose technology advantages disadvantages use cases"})
+2026-03-13 20:02:59.327 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: web_fetch({"url": "https://zeroclaw.net/openclaw-vs-zeroclaw"})
+2026-03-13 20:03:02.842 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: web_search({"query": "OpenClaw purpose technology advantages disadvantages use cases"})
+2026-03-13 20:03:05.199 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: web_fetch({"url": "https://emergent.sh/learn/what-is-openclaw"})
+2026-03-13 20:03:15.234 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: web_search({"query": "SkyClaw purpose technology advantages disadvantages use cases"})
+2026-03-13 20:03:18.921 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: web_fetch({"url": "https://github.com/nagisanzenin/skyclaw"})
+2026-03-13 20:03:28.919 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: read_file({"path": "SOUL.md"})
+2026-03-13 20:03:31.414 | INFO     | nanobot.agent.loop:_run_agent_loop:221 - Tool call: read_file({"path": "AGENTS.md"})
+2026-03-13 20:06:44.831 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 35615/65536 via tiktoken
+2026-03-13 20:06:44.832 | INFO     | nanobot.agent.loop:_process_message:444 - Response to telegram:1182384125: Dưới đây là bảng so sánh các loại "Claw" mà Su yêu cầu:
+
+| Đặc điểm        | Nanobot (Pi/Nanobot-RS)                    ...
+2026-03-13 20:06:45.090 | DEBUG    | nanobot.channels.telegram:_on_message:671 - Telegram message from 1182384125: ?...
+2026-03-13 20:06:45.091 | INFO     | nanobot.agent.loop:_process_message:367 - Processing message from telegram:1182384125: ?
+2026-03-13 20:09:20.786 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 35615/65536 via tiktoken
+2026-03-13 23:48:30.046 | INFO     | nanobot.channels.manager:_init_channels:48 - Telegram channel enabled
+2026-03-13 23:48:30.089 | INFO     | nanobot.cron.service:_load_store:83 - Cron: jobs.json modified externally, reloading
+2026-03-13 23:48:30.129 | INFO     | nanobot.cron.service:start:182 - Cron service started with 4 jobs
+2026-03-13 23:48:30.129 | INFO     | nanobot.heartbeat.service:start:119 - Heartbeat started (every 1800s)
+2026-03-13 23:48:30.130 | INFO     | nanobot.agent.loop:run:254 - Agent loop started
+2026-03-13 23:48:30.130 | INFO     | nanobot.channels.manager:start_all:81 - Starting telegram channel...
+2026-03-13 23:48:30.130 | INFO     | nanobot.channels.manager:_dispatch_outbound:109 - Outbound dispatcher started
+2026-03-13 23:48:30.155 | INFO     | nanobot.channels.telegram:start:237 - Starting Telegram bot (polling mode)...
+2026-03-13 23:48:31.363 | INFO     | nanobot.channels.telegram:start:247 - Telegram bot @claw_rtx2080ti_bot connected
+2026-03-13 23:48:31.809 | DEBUG    | nanobot.channels.telegram:start:251 - Telegram bot commands registered
+2026-03-13 23:48:32.425 | DEBUG    | nanobot.channels.telegram:_on_message:671 - Telegram message from 1182384125: tôi cần tạo 1 server mem0 nhẹ nhỏ.
+chạy với vllm t...
+2026-03-13 23:48:32.427 | INFO     | nanobot.agent.loop:_process_message:367 - Processing message from telegram:1182384125: tôi cần tạo 1 server mem0 nhẹ nhỏ.
+chạy với vllm tự host tren máy luôn. 
+
+cài vl...
+2026-03-13 23:50:46.347 | DEBUG    | nanobot.agent.memory:maybe_consolidate_by_tokens:314 - Token consolidation idle telegram:1182384125: 35615/65536 via tiktoken

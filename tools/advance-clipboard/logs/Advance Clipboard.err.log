@@ -1,0 +1,131 @@
+libpng error: Read Error
+libpng error: Read Error
+libpng error: bad adaptive filter value
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\main.py", line 50, in <module>
+    from pynput import keyboard
+ModuleNotFoundError: No module named 'pynput'
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\main.py", line 50, in <module>
+    from pynput import keyboard
+ModuleNotFoundError: No module named 'pynput'
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\main.py", line 50, in <module>
+    from pynput import keyboard
+ModuleNotFoundError: No module named 'pynput'
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\main.py", line 50, in <module>
+    from pynput import keyboard
+ModuleNotFoundError: No module named 'pynput'
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\main.py", line 50, in <module>
+    from pynput import keyboard
+ModuleNotFoundError: No module named 'pynput'
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\main.py", line 50, in <module>
+    from pynput import keyboard
+ModuleNotFoundError: No module named 'pynput'
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\main.py", line 50, in <module>
+    from pynput import keyboard
+ModuleNotFoundError: No module named 'pynput'
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\main.py", line 50, in <module>
+    from pynput import keyboard
+ModuleNotFoundError: No module named 'pynput'
+Installed 5 packages in 813ms
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x0000021700010910>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x0000021700010910>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x0000021700010910>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x0000021700010910>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x000001FCBB834190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x000001FCBB834190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x000001FCBB834190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x000001FCBB834190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x0000027D958A4190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x0000027D958A4190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x0000027D958A4190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x0000027D958A4190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x00000192959C4190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x00000192959C4190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x00000192959C4190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+Exception ignored while calling ctypes callback function <bound method Win32ClipboardMonitor._wndproc of <win32_monitor.Win32ClipboardMonitor object at 0x00000192959C4190>>:
+Traceback (most recent call last):
+  File "D:\python_project\multi-run-apps\tools\advance-clipboard\win32_monitor.py", line 244, in _wndproc
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+ctypes.ArgumentError: argument 4: OverflowError: int too long to convert
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+warning: `VIRTUAL_ENV=C:\Users\tanida\AppData\Local\uv\cache\environments-v2\multi-233b7b4240dc3d2e` does not match the project environment path `D:\python_project\multi-run-apps\.venv` and will be ignored; use `--active` to target the active environment instead
+'uv' is not recognized as an internal or external command,
+operable program or batch file.
+'uv' is not recognized as an internal or external command,
+operable program or batch file.

@@ -1,0 +1,407 @@
+The system cannot find the path specified.
+2026-02-25T12:50:51.210+09:00 Force: Error: lsof not found; required for --force
+2026-02-25T13:30:50.798+09:00 Force: Error: lsof not found; required for --force
+2026-02-25T04:39:56.276Z [tailscale] serve failed: spawn tailscale ENOENT
+'powershell' is not recognized as an internal or external command,
+operable program or batch file.
+2026-02-25T13:40:15.369+09:00 Subagent completion direct announce failed for run fc1706de-3250-4b05-8ee8-681978769be0:143c7a5b-0527-415b-8511-6191a00f0749: gateway timeout after 15000ms
+Gateway target: ws://127.0.0.1:18790
+Source: local loopback
+Config: C:\Users\admin\.openclaw\openclaw.json
+Bind: loopback
+2026-02-25T14:00:44.298+09:00 Subagent completion direct announce failed for run fc1706de-3250-4b05-8ee8-681978769be0:143c7a5b-0527-415b-8511-6191a00f0749: gateway timeout after 15000ms
+Gateway target: ws://127.0.0.1:18790
+Source: local loopback
+Config: C:\Users\admin\.openclaw\openclaw.json
+Bind: loopback
+2026-02-25T14:30:50.102+09:00 Subagent completion direct announce failed for run fc1706de-3250-4b05-8ee8-681978769be0:143c7a5b-0527-415b-8511-6191a00f0749: gateway timeout after 15000ms
+Gateway target: ws://127.0.0.1:18790
+Source: local loopback
+Config: C:\Users\admin\.openclaw\openclaw.json
+Bind: loopback
+2026-02-25T15:00:45.234+09:00 Subagent completion direct announce failed for run fc1706de-3250-4b05-8ee8-681978769be0:143c7a5b-0527-415b-8511-6191a00f0749: gateway timeout after 15000ms
+Gateway target: ws://127.0.0.1:18790
+Source: local loopback
+Config: C:\Users\admin\.openclaw\openclaw.json
+Bind: loopback
+2026-02-25T15:30:45.684+09:00 Subagent completion direct announce failed for run fc1706de-3250-4b05-8ee8-681978769be0:143c7a5b-0527-415b-8511-6191a00f0749: gateway timeout after 15000ms
+Gateway target: ws://127.0.0.1:18790
+Source: local loopback
+Config: C:\Users\admin\.openclaw\openclaw.json
+Bind: loopback
+2026-02-25T16:31:04.487+09:00 Subagent completion direct announce failed for run fc1706de-3250-4b05-8ee8-681978769be0:143c7a5b-0527-415b-8511-6191a00f0749: gateway timeout after 15000ms
+Gateway target: ws://127.0.0.1:18790
+Source: local loopback
+Config: C:\Users\admin\.openclaw\openclaw.json
+Bind: loopback
+2026-02-25T08:01:57.256Z [gateway] request handler failed: Error: unknown cron job id: 143c7a5b-0527-415b-8511-6191a00f0749
+2026-02-25T17:01:57.278+09:00 [tools] cron failed: Error: unknown cron job id: 143c7a5b-0527-415b-8511-6191a00f0749
+2026-02-25T17:04:57.066+09:00 [tools] cron failed: gateway timeout after 60000ms
+Gateway target: ws://127.0.0.1:18790
+Source: local loopback
+Config: C:\Users\admin\.openclaw\openclaw.json
+Bind: loopback
+2026-02-25T08:05:59.713Z [diagnostic] lane wait exceeded: lane=session:agent:main:main waitedMs=60368 queueAhead=0
+2026-02-25T08:07:00.765Z [diagnostic] lane wait exceeded: lane=session:agent:main:main waitedMs=60975 queueAhead=0
+2026-02-25T18:19:55.853+09:00 [tools] message failed: Local media path is not under an allowed directory: C:\Users\admin\.zeroclaw\workspace\img\464072462_18333861541181819_3143215058576594788_n - Copy.jpg
+2026-02-25T18:19:55.897+09:00 [tools] message failed: Local media path is not under an allowed directory: C:\Users\admin\.zeroclaw\workspace\img\464072462_18333861541181819_3143215058576594788_n - Copy.png
+2026-02-25T18:19:55.936+09:00 [tools] message failed: Local media path is not under an allowed directory: C:\Users\admin\.zeroclaw\workspace\img\464072462_18333861541181819_3143215058576594788_n.jpg
+2026-02-25T18:19:55.979+09:00 [tools] message failed: Local media path is not under an allowed directory: C:\Users\admin\.zeroclaw\workspace\img\464227450_18333861568181819_8269601082246740978_n.jpg
+2026-02-25T18:19:56.038+09:00 [tools] message failed: Local media path is not under an allowed directory: C:\Users\admin\.zeroclaw\workspace\img\471663699_2067314143728001_8015336718372354407_n.jpg
+2026-02-25T18:19:56.074+09:00 [tools] message failed: Local media path is not under an allowed directory: C:\Users\admin\.zeroclaw\workspace\img\556940973_18159756088384228_1132068582061096346_n.jpg
+2026-02-25T18:19:56.112+09:00 [tools] message failed: Local media path is not under an allowed directory: C:\Users\admin\.zeroclaw\workspace\img\558088640_18159756091384228_8960502755213338835_n.jpg
+2026-02-25T18:19:56.154+09:00 [tools] message failed: Local media path is not under an allowed directory: C:\Users\admin\.zeroclaw\workspace\img\637716296_17942758878116246_4951098470437623659_n.jpg
+2026-02-25T09:25:20.045Z [agent/embedded] embedded run timeout: runId=a939db16-85ee-4963-b0ef-b4320b8270f3 sessionId=4e5b7852-93b0-49ac-97fc-0ec4c77ebb8d timeoutMs=600000
+2026-02-25T09:25:20.080Z [agent/embedded] Profile google-gemini-cli:huonglogger@gmail.com timed out (possible rate limit). Trying next account...
+2026-02-25T09:25:20.083Z [diagnostic] lane task error: lane=main durationMs=600171 error="FailoverError: LLM request timed out."
+2026-02-25T09:25:20.086Z [diagnostic] lane task error: lane=session:agent:main:main durationMs=600177 error="FailoverError: LLM request timed out."
+2026-02-25T09:25:20.142Z [diagnostic] lane task error: lane=main durationMs=39 error="FailoverError: No available auth profile for google-gemini-cli (all in cooldown or unavailable)."
+2026-02-25T09:25:20.146Z [diagnostic] lane task error: lane=session:agent:main:main durationMs=48 error="FailoverError: No available auth profile for google-gemini-cli (all in cooldown or unavailable)."
+2026-02-25T18:25:20.150+09:00 Embedded agent failed before reply: All models failed (2): google-gemini-cli/gemini-3-flash-preview: LLM request timed out. (unknown) | google-gemini-cli/gemini-2.5-flash: No available auth profile for google-gemini-cli (all in cooldown or unavailable). (rate_limit)
+2026-02-25T18:31:58.006+09:00 [tools] message failed: Channel is required when multiple channels are configured: telegram, slack
+2026-02-25T18:31:58.013+09:00 [tools] message failed: Channel is required when multiple channels are configured: telegram, slack
+2026-02-25T18:31:58.029+09:00 [tools] message failed: Channel is required when multiple channels are configured: telegram, slack
+2026-02-25T10:34:19.136Z [telegram] network error: Network request for 'getUpdates' failed!; retrying in 2.14s.
+2026-02-25T11:37:45.271Z [telegram] network error: Network request for 'getUpdates' failed!; retrying in 4.42s.
+2026-02-25T20:37:45.274+09:00 [WARN]  socket-mode:SlackWebSocket:3 A pong wasn't received from the server before the timeout of 5000ms!
+2026-02-25T20:37:45.819+09:00 [session-write-lock] releasing lock held for 2004740ms (max=720000ms): C:\Users\admin\.openclaw\agents\main\sessions\4e5b7852-93b0-49ac-97fc-0ec4c77ebb8d.jsonl.lock
+2026-02-25T11:37:45.855Z [agent/embedded] embedded run timeout: runId=2060b339-e545-4db6-a8bc-10d6306527a2 sessionId=4e5b7852-93b0-49ac-97fc-0ec4c77ebb8d timeoutMs=600000
+2026-02-25T11:37:45.909Z [agent/embedded] Profile google-gemini-cli:huonglogger@gmail.com timed out (possible rate limit). Trying next account...
+2026-02-25T11:37:45.912Z [diagnostic] lane task error: lane=main durationMs=2005612 error="FailoverError: LLM request timed out."
+2026-02-25T11:37:45.916Z [diagnostic] lane task error: lane=session:agent:main:main durationMs=2005625 error="FailoverError: LLM request timed out."
+2026-02-25T11:37:46.681Z [diagnostic] lane task error: lane=main durationMs=751 error="FailoverError: No available auth profile for google-gemini-cli (all in cooldown or unavailable)."
+2026-02-25T11:37:46.683Z [diagnostic] lane task error: lane=session:agent:main:main durationMs=759 error="FailoverError: No available auth profile for google-gemini-cli (all in cooldown or unavailable)."
+2026-02-25T20:37:46.685+09:00 Embedded agent failed before reply: All models failed (2): google-gemini-cli/gemini-3-flash-preview: LLM request timed out. (unknown) | google-gemini-cli/gemini-2.5-flash: No available auth profile for google-gemini-cli (all in cooldown or unavailable). (rate_limit)
+2026-02-25T11:37:48.142Z [diagnostic] lane task error: lane=main durationMs=42 error="FailoverError: No available auth profile for google-gemini-cli (all in cooldown or unavailable)."
+2026-02-25T11:37:48.145Z [diagnostic] lane task error: lane=session:agent:main:main durationMs=50 error="FailoverError: No available auth profile for google-gemini-cli (all in cooldown or unavailable)."
+2026-02-25T20:37:48.148+09:00 Embedded agent failed before reply: All models failed (2): google-gemini-cli/gemini-3-flash-preview: No available auth profile for google-gemini-cli (all in cooldown or unavailable). (rate_limit) | google-gemini-cli/gemini-2.5-flash: Provider google-gemini-cli is in cooldown (all profiles unavailable) (rate_limit)
+2026-02-25T21:08:32.034+09:00 [WARN]  socket-mode:SlackWebSocket:4 A pong wasn't received from the server before the timeout of 5000ms!
+'C:/Users/admin/AppData/Roaming/npm/openclaw.cmd' is not recognized as an internal or external command,
+operable program or batch file.
+'C:/Users/admin/AppData/Roaming/npm/openclaw.cmd' is not recognized as an internal or external command,
+operable program or batch file.
+Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-02-26T23:20:12.687+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-02-26T23:20:30.284+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-02-26T23:20:43.229+09:00 Gateway failed to start: another gateway instance is already listening on ws://127.0.0.1:18790
+If the gateway is supervised, stop it with: openclaw gateway stop
+2026-02-26T23:20:43.593+09:00 Port 18790 is already in use.
+2026-02-26T23:20:43.595+09:00 - pid 45412: node.exe (127.0.0.1:18790)
+2026-02-26T23:20:43.597+09:00 - Another process is listening on this port.
+2026-02-26T23:20:43.906+09:00 Gateway service appears registered. Stop it first.
+2026-02-26T23:20:43.909+09:00 Tip: openclaw gateway stop
+2026-02-26T23:20:43.911+09:00 Or: schtasks /End /TN "OpenClaw Gateway"
+Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:06:54.499+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:06:57.897+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:07:00.172+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:07:00.736Z [gateway] security warning: dangerous config flags enabled: gateway.controlUi.allowInsecureAuth=true. Run `openclaw security audit`.
+2026-03-02T09:07:01.088+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:07:01.180Z [browser/server] Chrome extension relay init failed for profile "chrome": Error: listen EADDRINUSE: address already in use 127.0.0.1:18793
+2026-03-02T09:07:02.213+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:07:02.434+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:07:05.960Z [bonjour] gateway name conflict resolved; newName="DESKTOP-B5E4IUE (OpenClaw) (3)"
+2026-03-02T00:07:05.968Z [bonjour] gateway hostname conflict resolved; newHostname="openclaw-(3)"
+2026-03-02T09:07:06.860+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:07:07.010+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:07:07.677+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:07:08.687+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:07:09.118+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:07:43.302Z [agent/embedded] embedded run agent end: runId=ec9b4faf-a192-4a74-b5f1-72808e7a606f isError=true error=LLM request timed out.
+2026-03-02T00:07:43.341Z [diagnostic] lane task error: lane=main durationMs=33682 error="FailoverError: LLM request timed out."
+2026-03-02T00:07:43.345Z [diagnostic] lane task error: lane=session:agent:main:main durationMs=33690 error="FailoverError: LLM request timed out."
+2026-03-02T09:07:43.587+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:08:00.183+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:08:01.033+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:08:14.230+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:08:14.588+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:08:14.727+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:08:15.947+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:08:17.478Z [agent/embedded] embedded run agent end: runId=ec9b4faf-a192-4a74-b5f1-72808e7a606f isError=true error=LLM request timed out.
+2026-03-02T09:08:17.629+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:08:17.661Z [diagnostic] lane task error: lane=main durationMs=34295 error="FailoverError: LLM request timed out."
+2026-03-02T00:08:17.667Z [diagnostic] lane task error: lane=session:agent:main:main durationMs=34307 error="FailoverError: LLM request timed out."
+2026-03-02T09:08:17.673+09:00 Embedded agent failed before reply: All models failed (2): antigravity-proxy/gemini-3-flash: LLM request timed out. (timeout) | antigravity-proxy/gemini-2.5-flash: LLM request timed out. (timeout)
+2026-03-02T09:08:18.167+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:08:51.501Z [agent/embedded] embedded run agent end: runId=65038b23-56f1-47f6-8c97-cb56350527e2 isError=true error=LLM request timed out.
+2026-03-02T00:08:51.521Z [diagnostic] lane task error: lane=main durationMs=32290 error="FailoverError: LLM request timed out."
+2026-03-02T00:08:51.524Z [diagnostic] lane task error: lane=session:agent:main:main durationMs=32302 error="FailoverError: LLM request timed out."
+2026-03-02T09:08:51.729+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:09:00.176+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:09:24.538Z [agent/embedded] embedded run agent end: runId=65038b23-56f1-47f6-8c97-cb56350527e2 isError=true error=LLM request timed out.
+2026-03-02T09:09:24.640+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:09:24.661Z [diagnostic] lane task error: lane=main durationMs=33120 error="FailoverError: LLM request timed out."
+2026-03-02T00:09:24.665Z [diagnostic] lane task error: lane=session:agent:main:main durationMs=33131 error="FailoverError: LLM request timed out."
+2026-03-02T09:09:24.670+09:00 Embedded agent failed before reply: All models failed (2): antigravity-proxy/gemini-3-flash: LLM request timed out. (timeout) | antigravity-proxy/gemini-2.5-flash: LLM request timed out. (timeout)
+2026-03-02T09:09:25.337+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:09:52.811+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:09:54.652+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:09:56.828+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:09:59.395+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:03.982+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:06.568+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:10:07.149Z [gateway] security warning: dangerous config flags enabled: gateway.controlUi.allowInsecureAuth=true. Run `openclaw security audit`.
+2026-03-02T09:10:07.373+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:07.826+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:07.914+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:09.515+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:09.599+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:10:09.674Z [browser/server] Chrome extension relay init failed for profile "chrome": Error: listen EADDRINUSE: address already in use 127.0.0.1:18793
+2026-03-02T09:10:11.050+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:11.303+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:10:12.986Z [bonjour] gateway name conflict resolved; newName="DESKTOP-B5E4IUE (OpenClaw) (3)"
+2026-03-02T00:10:12.991Z [bonjour] gateway hostname conflict resolved; newHostname="openclaw-(3)"
+2026-03-02T09:10:14.721+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:19.625+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:19.765+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:10:27.954+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:11:06.520+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:11:08.179+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:11:09.527+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:11:09.675+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+claw\openclaw.mjs gateway (127.0.0.1:18790)
+2026-03-02T09:11:08.480+09:00 - Gateway already running locally. Stop it (openclaw gateway stop) or use a different port.
+2026-03-02T09:11:09.046+09:00 Gateway service appears registered. Stop it first.
+2026-03-02T09:11:09.053+09:00 Tip: openclaw gateway stop
+2026-03-02T09:11:09.060+09:00 Or: schtasks /End /TN "OpenClaw Gateway"
+Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:11:18.485+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:11:23.560+09:00 Gateway failed to start: gateway already running (pid 96576); lock timeout after 5000ms
+If the gateway is supervised, stop it with: openclaw gateway stop
+2026-03-02T09:11:24.273+09:00 Port 18790 is already in use.
+2026-03-02T09:11:24.276+09:00 - pid 96576: "C:\Program Files\nodejs\node.exe" --disable-warning=ExperimentalWarning C:\Users\admin\AppData\Roaming\npm\node_modules\openclaw\openclaw.mjs gateway (127.0.0.1:18790)
+2026-03-02T09:11:24.278+09:00 - Gateway already running locally. Stop it (openclaw gateway stop) or use a different port.
+2026-03-02T09:11:24.986+09:00 Gateway service appears registered. Stop it first.
+2026-03-02T09:11:24.990+09:00 Tip: openclaw gateway stop
+2026-03-02T09:11:24.996+09:00 Or: schtasks /End /TN "OpenClaw Gateway"
+Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:12:16.999+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:12:19.063+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:12:19.823+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:12:20.379Z [gateway] security warning: dangerous config flags enabled: gateway.controlUi.allowInsecureAuth=true. Run `openclaw security audit`.
+2026-03-02T09:12:20.452+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:12:20.601Z [browser/server] Chrome extension relay init failed for profile "chrome": Error: listen EADDRINUSE: address already in use 127.0.0.1:18793
+2026-03-02T09:12:20.899+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:12:20.988+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T00:12:23.833Z [bonjour] gateway name conflict resolved; newName="DESKTOP-B5E4IUE (OpenClaw) (3)"
+2026-03-02T00:12:23.842Z [bonjour] gateway hostname conflict resolved; newHostname="openclaw-(3)"
+2026-03-02T09:12:28.627+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:12:28.796+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:12:31.980+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:13:19.885+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:13:20.698+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:14:19.900+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:15:19.909+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:16:19.942+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:17:19.943+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:17:20.553+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:18:19.951+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:18:20.892+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:19:14.613+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:19:19.972+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:19:26.516+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:19:43.355+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:20:00.180+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:20:00.549+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:20:13.829+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:20:19.782+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:21:19.979+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:22:19.982+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:22:20.580+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:23:20.001+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:24:00.409+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:24:20.011+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:25:20.011+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:25:56.234+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:26:03.466+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:26:20.014+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:27:20.008+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:27:20.594+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:28:20.031+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:29:00.617+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:29:20.045+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:00.133+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:00.536+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:05.607+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:08.673+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:20.088+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:20.121+09:00 [tools] message failed: Unknown channel: gmail-sender
+2026-03-02T09:30:30.100+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:30.748+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:31.108+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:31.117+09:00 [tools] message failed: Channel is required when multiple channels are configured: telegram, slack
+2026-03-02T09:30:31.870+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:33.636+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:33.930+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:30:36.036+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:31:20.289+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:32:20.311+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:32:20.896+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:33:20.260+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:34:20.306+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:35:00.373+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:35:20.293+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:36:20.271+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:37:20.327+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:37:20.922+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:38:20.291+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:38:49.938+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:38:53.489+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:38:57.873+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:39:20.298+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:40:06.783+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:40:10.567+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:40:15.191+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:40:20.317+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:41:00.205+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:41:20.327+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:42:09.537+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:42:20.304+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:42:20.951+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:42:24.043+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:42:28.571+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:43:20.338+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:43:59.735+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:44:03.751+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:44:06.922+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:44:20.362+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:45:20.392+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:46:00.439+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:46:20.377+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:47:20.388+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:47:20.981+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:48:20.438+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:49:20.384+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:50:20.392+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:51:20.401+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:52:00.234+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:52:20.424+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:52:21.028+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:53:20.448+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:53:31.943+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:53:34.510+09:00 [tools] read failed: ENOENT: no such file or directory, access 'C:\Users\admin\.openclaw\workspace\TASKS.md'
+2026-03-02T09:54:20.459+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:54:28.737+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:54:36.207+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:54:37.332+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:55:07.730+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:55:08.011+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:55:08.398+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:55:08.548+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:55:08.901+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:55:09.057+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:55:20.441+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:56:20.426+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:56:29.648+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:56:33.210+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:56:34.749+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:57:20.440+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:57:21.031+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:57:36.467+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:57:49.981+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:57:53.590+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:57:56.939+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:58:00.198+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:58:03.832+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:58:07.088+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:58:10.377+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:58:20.438+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:58:29.489+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:58:41.445+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:58:41.592+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:58:41.932+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:59:01.560+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:59:02.516+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:59:13.282+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:59:15.434+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:59:16.180+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:59:18.341+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:59:18.675+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T09:59:20.458+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:00:00.159+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:00:00.556+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:00:04.579+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:00:07.194+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:00:07.361+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:00:20.471+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:01:20.521+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:01:22.212+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:01:29.913+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:01:33.089+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:02:20.495+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:02:21.088+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:02:53.359+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:03:00.343+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:03:20.326+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:03:20.975+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:03:21.888+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:03:28.059+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:03:29.457+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:03:37.056+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:03:57.966+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:20.970+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:49.065+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:49.367+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:49.536+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:55.833+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:58.617+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:58.965+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:59.245+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:59.573+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:04:59.726+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:05:00.221+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:05:00.328+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:05:04.010+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:05:20.972+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:06:21.018+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:06:33.960+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:06:42.026+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:07:21.019+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:07:21.624+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:07:46.017+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:08:00.561+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:08:03.519+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:08:20.996+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:09:21.017+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:09:52.096+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:00.157+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:01.194+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:01.581+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:06.475+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:20.999+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:38.314+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:38.746+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:38.878+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:39.269+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:39.606+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:39.890+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:40.041+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:40.326+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:42.928+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:43.308+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:43.692+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:10:44.085+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:11:21.043+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:12:21.020+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:12:21.645+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:13:21.034+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:14:00.393+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:14:21.035+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:15:21.052+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:16:21.050+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:17:21.077+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:17:21.658+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:18:21.085+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:19:00.605+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:19:21.081+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:19:41.093+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:19:49.668+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:20:00.142+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:20:00.556+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:20:04.119+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:20:06.934+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:20:07.105+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:20:07.481+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:20:07.654+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)
+2026-03-02T10:20:21.107+09:00 Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)

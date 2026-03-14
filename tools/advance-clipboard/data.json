@@ -1,0 +1,205 @@
+{
+  "history": [
+    {
+      "type": "text",
+      "content": "Đây là luồng đi chi tiết của hệ thống Clipboard Manager với SQLite làm lõi:\n\n## 1. Luồng Khởi Động (Startup Flow)\n\n```\n┌─────────────────┐\n│   Khởi động App │\n└────────┬────────┘\n         ▼\n┌─────────────────┐     Không có hoặc lỗi     ┌─────────────────┐\n│ Mở clipboard.db │────────────────────────────▶│ Tìm file JSON   │\n│   (SQLite)      │                             │ backup gần nhất │\n└────────┬────────┘                             └────────┬────────┘\n         │ Có dữ liệu                                      │ Validate\n         ▼                                                 ▼\n┌─────────────────┐                             ┌─────────────────┐\n│ Load 20 items   │                             │ Import vào DB   │\n│ gần nhất vào UI │                             │ (transaction)   │\n└────────┬────────┘                             └────────┬────────┘\n         │                                                │\n         └─────────────────┬──────────────────────────────┘\n                           ▼\n                  ┌─────────────────┐\n                  │   UI hiển thị   │\n                  │  Danh sách sẵn  │\n                  └─────────────────┘\n```\n\n**Chi tiết:**\n1. App mở → Kiểm tra `clipboard.db` có tồn tại và đọc được không\n2. **Nếu DB OK**: Query `SELECT * FROM clips ORDER BY created_at DESC LIMIT 20` → Render UI ngay\n3. **Nếu DB lỗi/trống**: Tìm file `clipboard_backup_*.json` mới nhất → Validate checksum → Import vào DB mới → Rồi mới render UI\n\n## 2. Luồng Thêm Mới (Write Flow) - Khi user copy text/ảnh\n\n```\nUser Copy (Ctrl+C)\n       │\n       ▼\n┌──────────────┐    Bỏ qua nếu    ┌──────────────┐\n│ Clipboard    │───duplicate──────▶│   (Kết thúc) │\n│ thay đổi     │    (hash check)   │              │\n└──────┬───────┘                   └──────────────┘\n       │ Khác biệt\n       ▼\n┌──────────────┐\n│ Tính MD5 hash│\n│ của content  │\n└──────┬───────┘\n       │\n       ▼\n┌─────────────────┐     Trùng lặp    ┌─────────────────┐\n│ Kiểm tra hash   │──────────────────▶│ UPDATE time     │\n│ trong SQLite    │                   │ (đẩy lên đầu)   │\n└────────┬────────┘                   └─────────────────┘\n         │ Chưa có\n         ▼\n┌─────────────────┐\n│ INSERT INTO     │\n│ clips (type,    │\n│ content, hash)  │\n└────────┬────────┘\n         │\n         ├──────────┐\n         ▼          ▼\n┌─────────────────┐ ┌─────────────────┐\n│ UI: Thêm item   │ │ Đánh dấu        │\n│ vào đầu list    │ │ need_backup=True│\n└─────────────────┘ └────────┬────────┘\n                             │\n                             ▼ (sau 30s debounce)\n                    ┌─────────────────┐\n                    │ Export JSON     │\n                    │ (background)    │\n                    └─────────────────┘\n```\n\n**Chi tiết quan trọng:**\n- **Immediate**: Chỉ có SQLite được ghi ngay lập tức (blocking < 5ms)\n- **Deferred**: JSON backup được đánh dấu chờ, thực sự ghi sau 30 giây (debounce)\n- **Duplicate handling**: Nếu content đã có → chỉ UPDATE timestamp, không INSERT mới\n\n## 3. Luồng Hiển Thị (Read Flow) - Khi mở UI (Ctrl+Alt+V)\n\n```\nUser bấm Hotkey\n       │\n       ▼\n┌──────────────┐\n│ Window Show  │\n│ at cursor    │\n└──────┬───────┘\n       │\n       ▼\n┌────────────────────────┐\n│ Query SQLite:          │\n│ - Pinned: LIMIT 50     │\n│ - History: LIMIT 20    │\n│ (chỉ lấy cần hiển thị) │\n└────────┬───────────────┘\n         │\n         ▼\n┌────────────────────────┐\n│ Tạo QListWidgetItem    │\n│ lazy loading: chỉ tạo  │\n│ widget khi cần render  │\n└────────┬───────────────┘\n         │\n         ▼\n┌────────────────────────┐\n│ User cuộn xuống        │\n│ (scroll)               │\n└────────┬───────────────┘\n         │\n         ▼\n┌────────────────────────┐\n│ Query thêm 20 items    │\n│ (pagination OFFSET)    │\n│ từ SQLite              │\n└────────────────────────┘\n```\n\n**Chi tiết:**\n- Không bao giờ load toàn bộ DB vào RAM\n- Virtual scrolling: Offset tăng dần khi user cuộn (giống Facebook/Twitter)\n- Mỗi lần query chỉ lấy đúng số lượng cần vẽ lên màn hình\n\n## 4. Luồng Thao Tác User (Pin/Move/Delete)\n\n```\nUser click nút ⭐ (Pin)\n       │\n       ▼\n┌──────────────┐\n│ BEGIN        │\n│ TRANSACTION  │\n└──────┬───────┘\n       │\n       ▼\n┌─────────────────┐\n│ UPDATE clips    │\n│ SET is_pinned=1 │\n│ WHERE id=?      │\n└────────┬────────┘\n         │\n         ▼\n┌─────────────────┐\n│ DELETE FROM     │\n│ clips WHERE     │\n│ id=? (cũ)       │  <-- Nếu chuyển từ history sang pinned\n└────────┬────────┘\n         │\n         ▼\n┌──────────────┐\n│ COMMIT       │\n└──────┬───────┘\n       │\n       ├──────────────────┐\n       ▼                  ▼\n┌──────────────┐  ┌─────────────────┐\n│ Refresh UI   │  │ Trigger backup  │\n│ (chỉ item này)│  │ flag (debounced)│\n└──────────────┘  └─────────────────┘\n```\n\n## 5. Luồng Backup Ngầm (Background Sync)\n\n```\nTimer 30s hoặc    ┌─────────────────┐\nApp Exit          │ need_backup=True? │\n       │          └────────┬────────┘\n       │                   │ Có\n       ▼                   ▼\n┌──────────────┐  ┌─────────────────┐\n│ Đóng app     │  │ SELECT * FROM   │\n│ (on_close)   │  │ clips ORDER BY  │\n│              │  │ created_at      │\n└──────┬───────┘  └────────┬────────┘\n       │                   │\n       └─────────┬─────────┘\n                 ▼\n        ┌─────────────────┐\n        │ Tính checksum   │\n        │ (SHA256)        │\n        └────────┬────────┘\n                 ▼\n        ┌─────────────────┐\n        │ Write JSON.temp │\n        │ (atomic write)  │\n        └────────┬────────┘\n                 ▼\n        ┌─────────────────┐\n        │ os.replace()    │\n        │ (.temp → .json) │\n        └────────┬────────┘\n                 ▼\n        ┌─────────────────┐\n        │ Xóa backup cũ   │\n        │ (rotate 10 file)│\n        └─────────────────┘\n```\n\n## 6. Luồng Khôi Phục (Disaster Recovery)\n\n```\nApp crash hoặc\nDB bị corrupt\n       │\n       ▼\n┌──────────────┐\n│ Thử mở DB    │\n│ Failed       │\n└──────┬───────┘\n       │\n       ▼\n┌─────────────────┐\n│ Tạo DB mới      │\n│ (blank)         │\n└────────┬────────┘\n         │\n         ▼\n┌─────────────────────────┐\n│ Tìm file JSON mới nhất  │\n│ trong /backups          │\n│ (theo timestamp tên file)│\n└────────┬────────────────┘\n         │\n         ▼\n┌─────────────────┐\n│ Validate JSON   │\n│ - Parse được?   │\n│ - Checksum đúng?│\n└────────┬────────┘\n         │ Lỗi\n         ▼\n┌─────────────────┐     Thành công     ┌─────────────────┐\n│ Thử file cũ hơn │────────────────────▶│ Import vào DB   │\n│ (backup trước)  │                     │ mới             │\n└─────────────────┘                     └────────┬────────┘\n                                                 │\n                                                 ▼\n                                        ┌─────────────────┐\n                                        │ App chạy bình   │\n                                        │ thường với dữ   │\n                                        │ liệu đã restore │\n                                        └─────────────────┘\n```\n\n## Tóm tắt nguyên tắc vàng\n\n| Thao tác | Nguồn thật | Backup | Tần suất |\n|---------|------------|---------|----------|\n| **Đọc** | SQLite | Không dùng | Liên tục |\n| **Ghi** | SQLite | Đánh dấu chờ | Ngay lập tức |\n| **Dự phòng** | JSON | Từ SQLite | Mỗi 5 phút / khi thoát |\n| **Khôi phục** | JSON → SQLite | Chuyển đổi 1 lần | Khi cần |\n\n**Luồng dữ liệu 1 chiều:** UI ↔ **SQLite** → JSON (không bao giờ ngược lại trong runtime)"
+    },
+    {
+      "type": "text",
+      "content": "choco install opencode"
+    },
+    {
+      "type": "text",
+      "content": "pm install -g @google/gemini-cli"
+    },
+    {
+      "type": "text",
+      "content": "brew install gemini-cli"
+    },
+    {
+      "type": "text",
+      "content": "openclaw models auth login --provider google-gemini-cli --set-default\n"
+    },
+    {
+      "type": "text",
+      "content": "gemini /auth\n"
+    },
+    {
+      "type": "text",
+      "content": ".\\gemini.exe .\\gemini.js --version\n"
+    },
+    {
+      "type": "text",
+      "content": "cd C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\ncopy .\\node.exe .\\gemini.exe\n"
+    },
+    {
+      "type": "text",
+      "content": "# 1) Tạm thời cho session hiện tại\n$portable=\"C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\"\n$env:Path = \"$portable;$env:Path\"\n\n# 2) Test phải ra portable trước\nwhere.exe gemini\ngemini --version\n"
+    },
+    {
+      "type": "text",
+      "content": "PowerShell 7.5.4\nLoading personal and system profiles took 2250ms.\n(base) PS E:\\python_project> where.exe gemini\nC:\\Users\\admin\\AppData\\Roaming\\npm\\gemini\nC:\\Users\\admin\\AppData\\Roaming\\npm\\gemini.cmd\nC:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\\gemini.cmd\nC:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\\gemini.js\n(base) PS E:\\python_project> gemini --version\n'chcp' is not recognized as an internal or external command,\noperable program or batch file.\n\n0.27.3\n(base) PS E:\\python_project> openclaw models auth login --provider google-gemini-cli --set-default\n\n🦞 OpenClaw 2026.2.3-1 (d84eb46)\n   One CLI to rule them all, and one more restart because you changed the port.\n\n│\n│\n◇  Gemini CLI OAuth ───────────────────────────────────────────────╮\n│                                                                  │\n│  Browser will open for Google authentication.                    │\n│  Sign in with your Google account for Gemini CLI access.         │\n│  The callback will be captured automatically on localhost:8085.  │\n│                                                                  │\n├──────────────────────────────────────────────────────────────────╯\n◇  Gemini CLI OAuth failed\n│\n◇  OAuth help ────────────────────────────────────────────────────╮\n│                                                                 │\n│  Trouble with OAuth? Ensure your Google account has Gemini CLI  │\n│  access.                                                        │\n│                                                                 │\n├─────────────────────────────────────────────────────────────────╯\nError: Gemini CLI not found. Install it first: brew install gemini-cli (or npm install -g @google/gemini-cli), or set GEMINI_CLI_OAUTH_CLIENT_ID.\n(base) PS E:\\python_project>"
+    },
+    {
+      "type": "text",
+      "content": "where.exe gemini\ngemini --version\n"
+    },
+    {
+      "type": "text",
+      "content": "$portable=\"C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\"\n[Environment]::SetEnvironmentVariable(\"PATH\", $env:PATH + \";$portable\", \"User\")\n"
+    },
+    {
+      "type": "text",
+      "content": "@'\n@echo off\n\"%~dp0node.exe\" --no-deprecation \"%~dp0gemini.js\" %*\n'@ | Set-Content -Encoding ASCII .\\gemini.cmd\n"
+    },
+    {
+      "type": "text",
+      "content": ".\\node.exe --no-deprecation .\\gemini.js --version\n"
+    },
+    {
+      "type": "text",
+      "content": "(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> dir gemini.js\n\n    Directory: C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n\nMode                 LastWriteTime         Length Name\n----                 -------------         ------ ----\n-a---           2/10/2026 12:30 AM       23471806 gemini.js\n\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> .\\node.exe .\\gemini.js --version\n(node:9660) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.\n(Use `node --trace-deprecation ...` to show where the warning was created)\n0.27.3\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>"
+    },
+    {
+      "type": "text",
+      "content": "dir gemini.js\n"
+    },
+    {
+      "type": "text",
+      "content": ".\\node.exe .\\gemini.js --version\n"
+    },
+    {
+      "type": "text",
+      "content": "cd C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\ncurl.exe -L --retry 3 --retry-delay 2 `\n  -o gemini.js \"https://github.com/google-gemini/gemini-cli/releases/latest/download/gemini.js\"\n"
+    },
+    {
+      "type": "text",
+      "content": "(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> dir Gemini_CLI_Portable.bat, node.exe\n\n    Directory: C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n\nMode                 LastWriteTime         Length Name\n----                 -------------         ------ ----\n-a---           2/10/2026 12:27 AM           5705 Gemini_CLI_Portable.bat\n-a---           2/10/2026 12:26 AM       95186592 node.exe\n\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> cmd /c \"C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\\Gemini_CLI_Portable.bat\"\n--- [1/2] node.exe é╠â_âEâôâìü[âh ---\n  è∙æ╢é╠ node.exe é≡Ägùpé╡é▄é╖üB\n  -> ì┼ÉVö┼ v25.6.0 é╠â_âEâôâìü[âhé¬è«ù╣é╡é▄é╡é╜üB\n\n--- [2/2] gemini.js é╠â_âEâôâìü[âh ---\n  è∙æ╢é╠ gemini.js é≡ìφÅ£é╡é▄é╡é╜üB\n  ì┼ÉVö┼é≡â_âEâôâìü[âhé╡é─éóé▄é╖...\n    ...â_âEâôâìü[âhé╔Ä╕ösüA2òbîπé╔ì─ÄÄìsé╡é▄é╖ (1/3).\n    ...â_âEâôâìü[âhé╔Ä╕ösüA2òbîπé╔ì─ÄÄìsé╡é▄é╖ (2/3).\n\n  [âGâëü[] gemini.js é╠â_âEâôâìü[âhé╔Ä╕ösé╡é▄é╡é╜üB\n  âlâbâgâÅü[âNÉ┌æ▒é╚é╟é≡èmöFé╡é─üAì─ôxÄ└ìsé╡é─é¡é╛é│éóüB\nPress any key to continue . . .\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>"
+    },
+    {
+      "type": "text",
+      "content": "\n  既存の gemini.js を削除しました。"
+    },
+    {
+      "type": "text",
+      "content": "cmd /c \"C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\\Gemini_CLI_Portable.bat\"\n"
+    },
+    {
+      "type": "text",
+      "content": "(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> cd C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> Get-Location\n\nPath\n----\nC:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> dir Gemini_CLI_Portable.bat, node.exe\n\n    Directory: C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n\nMode                 LastWriteTime         Length Name\n----                 -------------         ------ ----\n-a---           2/10/2026 12:27 AM           5705 Gemini_CLI_Portable.bat\n-a---           2/10/2026 12:26 AM       95186592 node.exe\n\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>"
+    },
+    {
+      "type": "text",
+      "content": "cd C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\nGet-Location\ndir Gemini_CLI_Portable.bat, node.exe\n"
+    },
+    {
+      "type": "text",
+      "content": "@echo off\nsetlocal enabledelayedexpansion\n\n:: =================================================================\n::     Windows—p Gemini CLI ƒ|[ƒ^ƒuƒ‹ƒoƒbƒ`ƒtƒ@ƒCƒ‹ (20250713”Å)\n:: =================================================================\n::\n::  ‚±‚Ìƒoƒbƒ`ƒtƒ@ƒCƒ‹‚ÍAGemini CLI‚ÌŽÀs‚É•K—v‚ÈƒRƒ“ƒ|[ƒlƒ“ƒg\n::  (node.exe, gemini.js)‚ðŽ©“®‚Åƒ_ƒEƒ“ƒ[ƒh‚µA‹N“®‚µ‚Ü‚·B\n\n:: --- ‰ŠúÝ’è ---\nset \"NODE_URL=https://nodejs.org/download/release/latest/win-x64/node.exe\"\nset \"GEMINI_URL=https://github.com/google-gemini/gemini-cli/releases/latest/download/gemini.js\"\nset \"SHORTCUT_NAME=Gemini CLI.lnk\"\ncd /d \"%~dp0\"\necho --- [1/2] node.exe ‚Ìƒ_ƒEƒ“ƒ[ƒh ---\nif exist \"node.exe\" (\n  echo   Šù‘¶‚Ì node.exe ‚ðŽg—p‚µ‚Ü‚·B\n) else (\n  del \"node.exe\" >nul 2>&1\n  if not errorlevel 1 echo   Šù‘¶‚Ì node.exe ‚ðíœ‚µ‚Ü‚µ‚½B\n  echo   ÅV”Å‚ðƒ_ƒEƒ“ƒ[ƒh‚µ‚Ä‚¢‚Ü‚·...\n  call :DownloadFile \"%NODE_URL%\" \"node.exe\"\n  if errorlevel 1 (\n      echo.\n      echo   [ƒGƒ‰[] node.exe ‚Ìƒ_ƒEƒ“ƒ[ƒh‚ÉŽ¸”s‚µ‚Ü‚µ‚½B\n      goto :ErrorExit\n  )\n)\n\nfor /f \"tokens=*\" %%v in ('node.exe --version 2^>nul') do set \"NODE_VER=%%v\"\nif defined NODE_VER (\n    echo   -^> ÅV”Å !NODE_VER! ‚Ìƒ_ƒEƒ“ƒ[ƒh‚ªŠ®—¹‚µ‚Ü‚µ‚½B\n) else (\n    echo   -^> ÅV”Å‚Ìƒ_ƒEƒ“ƒ[ƒh‚ªŠ®—¹‚µ‚Ü‚µ‚½B\n)\necho.\n\n\necho --- [2/2] gemini.js ‚Ìƒ_ƒEƒ“ƒ[ƒh ---\ndel \"gemini.js\" >nul 2>&1\nif not errorlevel 1 echo   Šù‘¶‚Ì gemini.js ‚ðíœ‚µ‚Ü‚µ‚½B\necho   ÅV”Å‚ðƒ_ƒEƒ“ƒ[ƒh‚µ‚Ä‚¢‚Ü‚·...\ncall :DownloadFile \"%GEMINI_URL%\" \"gemini.js\"\nif errorlevel 1 (\n    echo.\n    echo   [ƒGƒ‰[] gemini.js ‚Ìƒ_ƒEƒ“ƒ[ƒh‚ÉŽ¸”s‚µ‚Ü‚µ‚½B\n    goto :ErrorExit\n)\nfor %%f in (gemini.js) do set \"GEMINI_SIZE=%%~zf\"\necho   -^> ÅV”Å‚Ìƒ_ƒEƒ“ƒ[ƒh‚ªŠ®—¹‚µ‚Ü‚µ‚½ (ƒTƒCƒY: !GEMINI_SIZE! ƒoƒCƒg)B\necho.\n\necho --- ƒVƒ‡[ƒgƒJƒbƒg‚Ìì¬ ---\ndel \"%SHORTCUT_NAME%\" >nul 2>&1\nif not errorlevel 1 echo   Šù‘¶‚ÌƒVƒ‡[ƒgƒJƒbƒg‚ðíœ‚µ‚Ü‚µ‚½B\necho   ƒVƒ‡[ƒgƒJƒbƒg‚ðì¬‚µ‚Ä‚¢‚Ü‚·...\ncall :CreateShortcut\nif errorlevel 1 (\n    echo   [Œx] ƒVƒ‡[ƒgƒJƒbƒg‚Ìì¬‚ÉŽ¸”s‚µ‚Ü‚µ‚½BŽè“®‚Åì¬‚µ‚Ä‚­‚¾‚³‚¢B\n) else (\n    echo   -^> ƒVƒ‡[ƒgƒJƒbƒg‚ªì¬‚³‚ê‚Ü‚µ‚½B\n)\necho.\n\necho ======================================================================\necho                   š ƒZƒbƒgƒAƒbƒv‚ªŠ®—¹‚µ‚Ü‚µ‚½I š\necho ======================================================================\necho.\necho   ¡ ŽŸ‰ñˆÈ~‚ÌŽg‚¢•û\necho   ----------------------------------------------------------------\necho   [„§] “¯ŠK‘w‚É‚ ‚éu%SHORTCUT_NAME%v‚ðƒ_ƒuƒ‹ƒNƒŠƒbƒN‚µ‚Ä‹N“®\necho   [Žè“®] ƒRƒ}ƒ“ƒhƒvƒƒ“ƒvƒg“™‚Åunode.exe gemini.jsv‚ðŽÀs\necho.\necho   ’èŠú“I‚É‚±‚Ìƒoƒbƒ`ƒtƒ@ƒCƒ‹‚ðŽÀs‚µ‚ÄAÅV”Å‚ÉXV‚·‚é‚±‚Æ‚ð\necho   ‚¨‚·‚·‚ß‚µ‚Ü‚·B\necho.\necho   ¡ d—vF‰‰ñ‹N“®Žž‚ÌŽè‡\necho   ----------------------------------------------------------------\necho   ‚±‚ÌŒãA‹N“®‚·‚éPowerShell‚ÅA‰‰ñÝ’è‚ª•K—v‚Å‚·B\necho.\necho    (1) ƒe[ƒ}‚Ì‘I‘ð\necho        ¨ Œ©‚½–Ú‚ÌÝ’è‚Å‚·B‚±‚¾‚í‚è‚ª‚È‚¯‚ê‚ÎA‚»‚Ì‚Ü‚ÜyEnterƒL[zB\necho.\necho    (2) ”FØ•û–@‚Ì‘I‘ð \necho        ¨uLogin with Googlev‚ª‘I‘ð‚³‚ê‚½ó‘Ô‚ÅyEnterƒL[z‚ª‚¨‚·‚·‚ßB\necho.\necho   ƒuƒ‰ƒEƒU‚ª‹N“®‚µ‚½‚çA‰æ–Ê‚É]‚¢GoogleƒAƒJƒEƒ“ƒg‚ÅƒƒOƒCƒ“‚µ‚Ä‚­‚¾‚³‚¢B\necho.\necho ======================================================================\necho.\necho ‰½‚©ƒL[‚ð‰Ÿ‚·‚ÆAV‚µ‚¢ƒEƒBƒ“ƒhƒE(PowerShell)‚Å Gemini CLI ‚ð‹N“®‚µ‚Ü‚·...\npause >nul\n\nstart \"Gemini CLI\" powershell -NoProfile -ExecutionPolicy Bypass -Command ^\n    \"$env:NODE_NO_WARNINGS = '1'; \" ^\n    \"Write-Host 'Gemini CLI ‚ð‹N“®‚µ‚Ü‚µ‚½BI—¹‚·‚é‚É‚ÍƒEƒBƒ“ƒhƒE‚ð•Â‚¶‚é‚© /quit ‚ð“ü—Í‚µ‚Ä‚­‚¾‚³‚¢B' -ForegroundColor Green; \" ^\n    \"Write-Host ''; \" ^\n    \"& { Set-Location '%~dp0'; .\\node.exe .\\gemini.js %* }\"\n\ngoto :End\n\n:: =================================================================\n::  ƒTƒuƒ‹[ƒ`ƒ“\n:: =================================================================\n\n:CreateShortcut\n    setlocal\n    set \"CURRENT_DIR=%CD%\"\n    \n    powershell -ExecutionPolicy Bypass -NoProfile -Command ^\n        \"$WshShell = New-Object -ComObject WScript.Shell; \" ^\n        \"$Shortcut = $WshShell.CreateShortcut('%CURRENT_DIR%\\%SHORTCUT_NAME%'); \" ^\n        \"$Shortcut.TargetPath = 'powershell.exe'; \" ^\n        \"$Shortcut.Arguments = '-ExecutionPolicy Bypass -NoExit -Command \\\"$env:NODE_NO_WARNINGS = ''1''; Set-Location ''%CURRENT_DIR%''; ./node.exe ./gemini.js\\\"'; \" ^\n        \"$Shortcut.WorkingDirectory = '%CURRENT_DIR%'; \" ^\n        \"$Shortcut.IconLocation = 'powershell.exe,0'; \" ^\n        \"$Shortcut.Description = 'Gemini CLI‚ð‹N“®‚µ‚Ü‚·'; \" ^\n        \"$Shortcut.Save()\" >nul 2>&1\n    \n    endlocal\n    exit /b %ERRORLEVEL%\n\n:DownloadFile\n    setlocal\n    set \"URL=%~1\"\n    set \"OUTFILE=%~2\"\n    set \"MAX_RETRIES=3\"\n\n    for /L %%i in (1,1,%MAX_RETRIES%) do (\n        powershell -NoProfile -ExecutionPolicy Bypass -Command ^\n            \"try { \" ^\n            \"    $wc = New-Object System.Net.WebClient; \" ^\n            \"    $wc.Headers.Add('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'); \" ^\n            \"    $wc.DownloadFile('%URL%', '%OUTFILE%'); \" ^\n            \"    exit 0; \" ^\n            \"} catch { \" ^\n            \"    exit 1; \" ^\n            \"}\" >nul 2>&1\n        \n        if not errorlevel 1 (\n            for %%f in (\"%OUTFILE%\") do if %%~zf gtr 0 exit /b 0\n        )\n        \n        if %%i neq %MAX_RETRIES% (\n            echo     ...ƒ_ƒEƒ“ƒ[ƒh‚ÉŽ¸”sA2•bŒã‚ÉÄŽŽs‚µ‚Ü‚· ^(%%i/%MAX_RETRIES%^).\n            timeout /t 2 /nobreak >nul\n        )\n    )\n    \n    endlocal\n    exit /b 1\n\n:ErrorExit\n    echo   ƒlƒbƒgƒ[ƒNÚ‘±‚È‚Ç‚ðŠm”F‚µ‚ÄAÄ“xŽÀs‚µ‚Ä‚­‚¾‚³‚¢B\n    pause\n\n:End\nendlocal"
+    },
+    {
+      "type": "text",
+      "content": "echo --- [1/2] node.exe ‚Ìƒ_ƒEƒ“ƒ[ƒh ---\nif exist \"node.exe\" (\n  echo   Šù‘¶‚Ì node.exe ‚ðŽg—p‚µ‚Ü‚·B\n) else (\n  del \"node.exe\" >nul 2>&1\n  if not errorlevel 1 echo   Šù‘¶‚Ì node.exe ‚ðíœ‚µ‚Ü‚µ‚½B\n  echo   ÅV”Å‚ðƒ_ƒEƒ“ƒ[ƒh‚µ‚Ä‚¢‚Ü‚·...\n  call :DownloadFile \"%NODE_URL%\" \"node.exe\"\n  if errorlevel 1 (\n      echo.\n      echo   [ƒGƒ‰[] node.exe ‚Ìƒ_ƒEƒ“ƒ[ƒh‚ÉŽ¸”s‚µ‚Ü‚µ‚½B\n      goto :ErrorExit\n  )\n)\n\nfor /f \"tokens=*\" %%v in ('node.exe --version 2^>nul') do set \"NODE_VER=%%v\"\nif defined NODE_VER (\n    echo   -^> ÅV”Å !NODE_VER! ‚Ìƒ_ƒEƒ“ƒ[ƒh‚ªŠ®—¹‚µ‚Ü‚µ‚½B\n) else (\n    echo   -^> ÅV”Å‚Ìƒ_ƒEƒ“ƒ[ƒh‚ªŠ®—¹‚µ‚Ü‚µ‚½B\n)\necho.\n"
+    },
+    {
+      "type": "text",
+      "content": "\necho ƒZƒbƒgƒAƒbƒv‚ðŠJŽn‚µ‚Ü‚·...\necho.\n\necho --- [1/2] node.exe ‚Ìƒ_ƒEƒ“ƒ[ƒh ---\ndel \"node.exe\" >nul 2>&1\nif not errorlevel 1 echo   Šù‘¶‚Ì node.exe ‚ðíœ‚µ‚Ü‚µ‚½B\necho   ÅV”Å‚ðƒ_ƒEƒ“ƒ[ƒh‚µ‚Ä‚¢‚Ü‚·...\ncall :DownloadFile \"%NODE_URL%\" \"node.exe\"\nif errorlevel 1 (\n    echo.\n    echo   [ƒGƒ‰[] node.exe ‚Ìƒ_ƒEƒ“ƒ[ƒh‚ÉŽ¸”s‚µ‚Ü‚µ‚½B\n    goto :ErrorExit\n)\nfor /f \"tokens=*\" %%v in ('node.exe --version 2^>nul') do set \"NODE_VER=%%v\"\nif defined NODE_VER (\n    echo   -^> ÅV”Å !NODE_VER! ‚Ìƒ_ƒEƒ“ƒ[ƒh‚ªŠ®—¹‚µ‚Ü‚µ‚½B\n) else (\n    echo   -^> ÅV”Å‚Ìƒ_ƒEƒ“ƒ[ƒh‚ªŠ®—¹‚µ‚Ü‚µ‚½B\n)\necho."
+    },
+    {
+      "type": "text",
+      "content": "if exist \"%~dp0node.exe\" (\n  echo 既存の node.exe を使用します。\n  goto :DOWNLOAD_GEMINI\n)\n"
+    },
+    {
+      "type": "text",
+      "content": "del node.exe"
+    },
+    {
+      "type": "text",
+      "content": "C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>cmd /c Gemini_CLI_Portable.bat\nセットアップを開始します...\n\n--- [1/2] node.exe のダウンロード ---\n  既存の node.exe を削除しました。\n  最新版をダウンロードしています...\n    ...ダウンロードに失敗、2秒後に再試行します (1/3).\n    ...ダウンロードに失敗、2秒後に再試行します (2/3).\n\n  [エラー] node.exe のダウンロードに失敗しました。\n  ネットワーク接続などを確認して、再度実行してください。\nPress any key to continue . . ."
+    },
+    {
+      "type": "text",
+      "content": "(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> Get-Item .\\node.exe\n\n    Directory: C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n\nMode                 LastWriteTime         Length Name\n----                 -------------         ------ ----\n-a---           2/10/2026 12:24 AM       95186592 node.exe"
+    },
+    {
+      "type": "text",
+      "content": "Get-Item .\\node.exe\n"
+    },
+    {
+      "type": "text",
+      "content": "cmd /c Gemini_CLI_Portable.bat\n"
+    },
+    {
+      "type": "text",
+      "content": "cd C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\ncurl.exe -L --retry 3 --retry-delay 2 `\n  -o node.exe \"https://nodejs.org/download/release/latest/win-x64/node.exe\"\n"
+    },
+    {
+      "type": "text",
+      "content": "C:\\Users\\admin>cd /d C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n\nC:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>chcp 932\nActive code page: 932\n\nC:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>Gemini_CLI_Portable.bat\nセットアップを開始します...\n\n--- [1/2] node.exe のダウンロード ---\n  既存の node.exe を削除しました。\n  最新版をダウンロードしています...\n    ...ダウンロードに失敗、2秒後に再試行します (1/3).\n    ...ダウンロードに失敗、2秒後に再試行します (2/3).\n\n  [エラー] node.exe のダウンロードに失敗しました。\n  ネットワーク接続などを確認して、再度実行してください。\nPress any key to continue . . .\n\nC:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>Select-String -Path .\\Gemini_CLI_Portable.bat -Pattern \"http\",\"https\",\"curl\",\"bitsadmin\",\"powershell\",\"Invoke-WebRequest\",\"wget\"\n'Select-String' is not recognized as an internal or external command,\noperable program or batch file.\n\nC:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>\n\n\n\n"
+    },
+    {
+      "type": "text",
+      "content": "(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> Select-String -Path .\\Gemini_CLI_Portable.bat -Pattern \"http\",\"https\",\"curl\",\"bitsadmin\",\"powershell\",\"Invoke-WebRequest\",\"wget\"\n\nGemini_CLI_Portable.bat:12:set\n\"NODE_URL=https://nodejs.org/download/release/latest/win-x64/node.exe\"\nGemini_CLI_Portable.bat:13:set \"GEMINI_URL=https://github.com/google-gemini\n/gemini-cli/releases/latest/download/gemini.js\"\nGemini_CLI_Portable.bat:78:echo\n���̌�A�N������PowerShell�ŁA����ݒ肪�K�v�ł��B\nGemini_CLI_Portable.bat:90:echo\n�����L�[�������ƁA�V�����E�B���h�E(PowerShell)�� Gemini CLI ���N�����܂�...\nGemini_CLI_Portable.bat:93:start \"Gemini CLI\" powershell -NoProfile\n-ExecutionPolicy Bypass -Command ^\nGemini_CLI_Portable.bat:109:    powershell -ExecutionPolicy Bypass\n-NoProfile -Command ^\nGemini_CLI_Portable.bat:112:        \"$Shortcut.TargetPath =\n'powershell.exe'; \" ^\nGemini_CLI_Portable.bat:115:        \"$Shortcut.IconLocation =\n'powershell.exe,0'; \" ^\nGemini_CLI_Portable.bat:129:        powershell -NoProfile -ExecutionPolicy\nBypass -Command ^\n\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>"
+    },
+    {
+      "type": "text",
+      "content": "# Ví dụ test 1 URL (thay URL thật bạn thấy trong .bat)\nInvoke-WebRequest \"https://...\" -OutFile \"$env:TEMP\\test.bin\"\n"
+    },
+    {
+      "type": "text",
+      "content": "Select-String -Path .\\Gemini_CLI_Portable.bat -Pattern \"http\",\"https\",\"curl\",\"bitsadmin\",\"powershell\",\"Invoke-WebRequest\",\"wget\"\n"
+    },
+    {
+      "type": "text",
+      "content": "cd /d C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\nchcp 932\nGemini_CLI_Portable.bat\n"
+    },
+    {
+      "type": "text",
+      "content": "âZâbâgâAâbâvé≡èJÄné╡é▄é╖...\n\n--- [1/2] node.exe é╠â_âEâôâìü[âh ---\n  è∙æ╢é╠ node.exe é≡ìφÅ£é╡é▄é╡é╜üB\n  ì┼ÉVö┼é≡â_âEâôâìü[âhé╡é─éóé▄é╖...\n    ...â_âEâôâìü[âhé╔Ä╕ösüA2òbîπé╔ì─ÄÄìsé╡é▄é╖ (1/3).\n    ...â_âEâôâìü[âhé╔Ä╕ösüA2òbîπé╔ì─ÄÄìsé╡é▄é╖ (2/3).\n\n  [âGâëü[] node.exe é╠â_âEâôâìü[âhé╔Ä╕ösé╡é▄é╡é╜üB\n  âlâbâgâÅü[âNÉ┌æ▒é╚é╟é≡èmöFé╡é─üAì─ôxÄ└ìsé╡é─é¡é╛é│éóüB\nPress any key to continue . . .\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> Unblock-File .\\Gemini_CLI_Portable.bat\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> cmd /c Gemini_CLI_Portable.bat\nâZâbâgâAâbâvé≡èJÄné╡é▄é╖...\n\n--- [1/2] node.exe é╠â_âEâôâìü[âh ---\n  è∙æ╢é╠ node.exe é≡ìφÅ£é╡é▄é╡é╜üB\n  ì┼ÉVö┼é≡â_âEâôâìü[âhé╡é─éóé▄é╖...\n    ...â_âEâôâìü[âhé╔Ä╕ösüA2òbîπé╔ì─ÄÄìsé╡é▄é╖ (1/3).\n    ...â_âEâôâìü[âhé╔Ä╕ösüA2òbîπé╔ì─ÄÄìsé╡é▄é╖ (2/3).\n\n  [âGâëü[] node.exe é╠â_âEâôâìü[âhé╔Ä╕ösé╡é▄é╡é╜üB\n  âlâbâgâÅü[âNÉ┌æ▒é╚é╟é≡èmöFé╡é─üAì─ôxÄ└ìsé╡é─é¡é╛é│éóüB\nPress any key to continue . . .\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> dir node.exe, gemini.js\nGet-ChildItem: Cannot find path 'C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\\node.exe' because it does not exist.\nGet-ChildItem: Cannot find path 'C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\\gemini.js' because it does not exist.\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>"
+    },
+    {
+      "type": "text",
+      "content": "dir node.exe, gemini.js\n"
+    },
+    {
+      "type": "text",
+      "content": "Unblock-File .\\Gemini_CLI_Portable.bat\ncmd /c Gemini_CLI_Portable.bat\n"
+    },
+    {
+      "type": "text",
+      "content": "cd C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n.\\Gemini_CLI_Portable.bat\n"
+    },
+    {
+      "type": "text",
+      "content": "Remove-Item C:\\Windows\\System32\\gemini.exe -Force\n"
+    },
+    {
+      "type": "text",
+      "content": "n"
+    },
+    {
+      "type": "text",
+      "content": "(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> dir\n\n    Directory: C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n\nMode                 LastWriteTime         Length Name\n----                 -------------         ------ ----\n-a---           7/13/2025  6:37 AM           5651 Gemini_CLI_Portable.bat\n\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> dir *.bat\n\n    Directory: C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n\nMode                 LastWriteTime         Length Name\n----                 -------------         ------ ----\n-a---           7/13/2025  6:37 AM           5651 Gemini_CLI_Portable.bat\n\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>\n"
+    },
+    {
+      "type": "text",
+      "content": "dir\ndir *.bat\n"
+    },
+    {
+      "type": "text",
+      "content": "\n--- [1/2] node.exe é╠â_âEâôâìü[âh"
+    },
+    {
+      "type": "text",
+      "content": "cd C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n.\\Gemini_CLI_Portable.bat\ndir node.exe, gemini.js\n"
+    },
+    {
+      "type": "text",
+      "content": "Gemini_CLI_Portable.bat"
+    },
+    {
+      "type": "text",
+      "content": "(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> cd C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> .\\Gemini_CLI_Portable.bat\n.\\Gemini_CLI_Portable.bat: The term '.\\Gemini_CLI_Portable.bat' is not recognized as a name of a cmdlet, function, script file, or executable program.\nCheck the spelling of the name, or if a path was included, verify that the path is correct and try again.\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable> dir node.exe, gemini.js\nGet-ChildItem: Cannot find path 'C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\\node.exe' because it does not exist.\nGet-ChildItem: Cannot find path 'C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable\\gemini.js' because it does not exist.\n(base) PS C:\\Users\\admin\\Downloads\\Gemini_CLI_Portable>\n"
+    }
+  ],
+  "pinned": []
+}
