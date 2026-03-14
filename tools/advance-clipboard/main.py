@@ -959,29 +959,52 @@ class ClientApp(QWidget):
             return
 
         self._paste_in_progress = True
-        self._set_pending_clipboard_guard(data)
         self.input_locked = True
-
-        try:
-            if data["type"] == "text":
-                self.clipboard.setText(data["content"])
-            else:
-                p = os.path.join(IMAGE_DIR, data["content"])
-                if not os.path.exists(p):
-                    self._finish_paste_attempt(clear_guard=True)
-                    return
-                pixmap = QPixmap(p)
-                if pixmap.isNull():
-                    self._finish_paste_attempt(clear_guard=True)
-                    return
-                self.clipboard.setPixmap(pixmap)
-        except Exception:
-            self._finish_paste_attempt(clear_guard=True)
-            return
 
         self.hide()
         QTimer.singleShot(0, self._reset_ui_after_paste_request)
+        QTimer.singleShot(0, lambda: self._prepare_clipboard_and_paste(data, 0))
+
+    def _prepare_clipboard_and_paste(self, data, attempt_index):
+        retry_delays = (0, 30, 70, 140)
+
+        if not self._write_clipboard_payload(data):
+            next_attempt = attempt_index + 1
+            if next_attempt < len(retry_delays):
+                QTimer.singleShot(
+                    retry_delays[next_attempt],
+                    lambda: self._prepare_clipboard_and_paste(data, next_attempt),
+                )
+            else:
+                self._finish_paste_attempt(clear_guard=True)
+            return
+
+        self._set_pending_clipboard_guard(data)
         QTimer.singleShot(10, lambda: self._restore_focus_and_paste(12))
+
+    def _write_clipboard_payload(self, data):
+        try:
+            if data["type"] == "text":
+                self.clipboard.setText(data["content"])
+                return self.clipboard.text() == data["content"]
+
+            p = os.path.join(IMAGE_DIR, data["content"])
+            if not os.path.exists(p):
+                return False
+
+            pixmap = QPixmap(p)
+            if pixmap.isNull():
+                return False
+
+            self.clipboard.setPixmap(pixmap)
+            mime = self.clipboard.mimeData()
+            if not mime or not mime.hasImage():
+                return False
+
+            img = QImage(mime.imageData())
+            return not img.isNull() and self._image_storage_name(img) == data["content"]
+        except Exception:
+            return False
 
     def _perform_keyboard_paste(self):
         """Simulate Ctrl+V using pure Win32 keybd_event (no pynput)."""
