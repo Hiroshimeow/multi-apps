@@ -10,6 +10,7 @@ import sqlite3
 import hashlib
 import os
 import threading
+import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
@@ -362,31 +363,55 @@ class ClipboardStorage:
             "SELECT COUNT(*) FROM clips WHERE is_pinned = 1"
         ).fetchone()[0]
 
+    @staticmethod
+    def _split_search_terms(query: str) -> List[str]:
+        """Split free-text query into normalized AND-search tokens."""
+        return [term for term in re.split(r"\s+", (query or "").strip()) if term]
+
     def search_pinned(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
         """Search pinned clips by content, tag, or group_name."""
+        terms = self._split_search_terms(query)
+        if not terms:
+            return []
+
         conn = _get_connection()
-        query_pattern = f"%{query}%"
+        where_clauses = []
+        params: List[Any] = []
+        for term in terms:
+            pattern = f"%{term}%"
+            where_clauses.append("(content LIKE ? OR tag LIKE ? OR group_name LIKE ?)")
+            params.extend([pattern, pattern, pattern])
+
         rows = conn.execute(
-            """SELECT id, type, content, hash, tag, group_name, created_at, updated_at
-               FROM clips WHERE is_pinned = 1 
-               AND (content LIKE ? OR tag LIKE ? OR group_name LIKE ?)
+            f"""SELECT id, type, content, hash, tag, group_name, created_at, updated_at
+               FROM clips WHERE is_pinned = 1
+               AND {' AND '.join(where_clauses)}
                ORDER BY pin_order DESC
                LIMIT ?""",
-            (query_pattern, query_pattern, query_pattern, limit),
+            params + [limit],
         ).fetchall()
         return [dict(r) for r in rows]
 
     def search_history(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
         """Search history clips by content."""
+        terms = self._split_search_terms(query)
+        if not terms:
+            return []
+
         conn = _get_connection()
-        query_pattern = f"%{query}%"
+        where_clauses = []
+        params: List[Any] = []
+        for term in terms:
+            where_clauses.append("content LIKE ?")
+            params.append(f"%{term}%")
+
         rows = conn.execute(
-            """SELECT id, type, content, hash, tag, created_at, updated_at
+            f"""SELECT id, type, content, hash, tag, created_at, updated_at
                FROM clips WHERE is_pinned = 0
-               AND content LIKE ?
+               AND {' AND '.join(where_clauses)}
                ORDER BY updated_at DESC
                LIMIT ?""",
-            (query_pattern, limit),
+            params + [limit],
         ).fetchall()
         return [dict(r) for r in rows]
 
