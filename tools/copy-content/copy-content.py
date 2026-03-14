@@ -2,7 +2,6 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "PyQt6",
-#     "pynput",
 #     "pywin32; sys_platform == 'win32'",
 # ]
 # ///
@@ -13,7 +12,8 @@ import re
 import json
 import fnmatch
 import ctypes
-from pathlib import Path
+import ctypes.wintypes
+import threading
 
 from PyQt6.QtWidgets import (
     QApplication,
@@ -29,16 +29,6 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QEvent
 from PyQt6.QtGui import QAction, QCursor, QGuiApplication
-
-try:
-    from pynput import keyboard
-    from pynput.keyboard import Key
-
-    HAS_PYNPUT = True
-except ImportError:
-    keyboard = None
-    Key = None
-    HAS_PYNPUT = False
 
 # --- Cố gắng import thư viện lấy Path Windows ---
 try:
@@ -87,41 +77,199 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "copy-content-config.json")
 OUTPUT_FILE = os.path.join(BASE_DIR, "copy-content.txt")
 
-# --- Worker xử lý Hotkey (Theo phong cách auto-suggest) ---
+# --- Win32 hotkey worker (RegisterHotKey, không dùng keyboard hooks) ---
+WM_HOTKEY = 0x0312
+WM_DESTROY = 0x0002
+WM_USER = 0x0400
+WM_APP_QUIT = WM_USER + 1
+VK_C = 0x43
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_NOREPEAT = 0x4000
+HOTKEY_TOGGLE = 1
+HWND_MESSAGE = ctypes.wintypes.HWND(-3)
+
+if sys.maxsize > 2**32:
+    LRESULT = ctypes.c_int64
+    LPARAM = ctypes.c_int64
+    WPARAM = ctypes.c_uint64
+else:
+    LRESULT = ctypes.c_long
+    LPARAM = ctypes.c_long
+    WPARAM = ctypes.c_uint
+
+WNDPROC = ctypes.WINFUNCTYPE(
+    LRESULT,
+    ctypes.wintypes.HWND,
+    ctypes.wintypes.UINT,
+    WPARAM,
+    LPARAM,
+)
+
+user32 = ctypes.windll.user32
+user32.DefWindowProcW.argtypes = [
+    ctypes.wintypes.HWND,
+    ctypes.wintypes.UINT,
+    WPARAM,
+    LPARAM,
+]
+user32.DefWindowProcW.restype = LRESULT
+
+
+def _coerce_lparam(value):
+    bits = ctypes.sizeof(ctypes.c_void_p) * 8
+    mask = (1 << bits) - 1
+    value &= mask
+    if value >= (1 << (bits - 1)):
+        value -= 1 << bits
+    return value
+
+
+class WNDCLASSEX(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.wintypes.UINT),
+        ("style", ctypes.wintypes.UINT),
+        ("lpfnWndProc", WNDPROC),
+        ("cbClsExtra", ctypes.c_int),
+        ("cbWndExtra", ctypes.c_int),
+        ("hInstance", ctypes.wintypes.HINSTANCE),
+        ("hIcon", ctypes.wintypes.HANDLE),
+        ("hCursor", ctypes.wintypes.HANDLE),
+        ("hbrBackground", ctypes.wintypes.HANDLE),
+        ("lpszMenuName", ctypes.wintypes.LPCWSTR),
+        ("lpszClassName", ctypes.wintypes.LPCWSTR),
+        ("hIconSm", ctypes.wintypes.HANDLE),
+    ]
+
+
 class HotkeyWorker(QObject):
     activated = pyqtSignal()
-    escape_pressed = pyqtSignal()
 
     def __init__(self):
         super().__init__()
-        self.hotkeys = None
-        self.listener = None
+        self._hwnd = None
+        self._thread = None
+        self._thread_id = None
+        self._running = False
+        self._startup_ok = False
+        self._startup_event = threading.Event()
+        self._wndproc_ref = None
 
     def start(self):
-        if not HAS_PYNPUT:
+        if not HAS_WIN32 or self._running:
             return False
-        # Lắng nghe tổ hợp phím Ctrl+Alt+C
-        self.hotkeys = keyboard.GlobalHotKeys({
-            '<ctrl>+<alt>+c': self.on_activate
-        })
-        
-        # Lắng nghe phím Esc để ẩn
-        self.listener = keyboard.Listener(on_press=self.on_press)
-        
-        self.hotkeys.start()
-        self.listener.start()
-        return True
 
-    def on_activate(self):
-        self.activated.emit()
-
-    def on_press(self, key):
-        if key == Key.esc:
-            self.escape_pressed.emit()
+        self._startup_ok = False
+        self._startup_event.clear()
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._run_message_loop,
+            daemon=True,
+            name="CopyContentHotkeyWorker",
+        )
+        self._thread.start()
+        self._startup_event.wait(timeout=2)
+        return self._startup_ok
 
     def stop(self):
-        if self.hotkeys: self.hotkeys.stop()
-        if self.listener: self.listener.stop()
+        if not self._running:
+            return
+
+        self._running = False
+        if self._thread_id:
+            ctypes.windll.user32.PostThreadMessageW(self._thread_id, WM_APP_QUIT, 0, 0)
+        if self._thread:
+            self._thread.join(timeout=3)
+            self._thread = None
+
+    def _run_message_loop(self):
+        kernel32 = ctypes.windll.kernel32
+
+        self._thread_id = kernel32.GetCurrentThreadId()
+        self._wndproc_ref = WNDPROC(self._wndproc)
+
+        class_name = f"CopyContentHotkey_{os.getpid()}"
+        hinstance = kernel32.GetModuleHandleW(None)
+
+        wc = WNDCLASSEX()
+        wc.cbSize = ctypes.sizeof(WNDCLASSEX)
+        wc.style = 0
+        wc.lpfnWndProc = self._wndproc_ref
+        wc.cbClsExtra = 0
+        wc.cbWndExtra = 0
+        wc.hInstance = hinstance
+        wc.hIcon = None
+        wc.hCursor = None
+        wc.hbrBackground = None
+        wc.lpszMenuName = None
+        wc.lpszClassName = class_name
+        wc.hIconSm = None
+
+        atom = user32.RegisterClassExW(ctypes.byref(wc))
+        if not atom:
+            self._running = False
+            self._startup_event.set()
+            return
+
+        try:
+            self._hwnd = user32.CreateWindowExW(
+                0,
+                class_name,
+                "CopyContentHotkey",
+                0,
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                None,
+                hinstance,
+                None,
+            )
+
+            if not self._hwnd:
+                self._running = False
+                self._startup_event.set()
+                return
+
+            if not user32.RegisterHotKey(
+                self._hwnd,
+                HOTKEY_TOGGLE,
+                MOD_CONTROL | MOD_ALT | MOD_NOREPEAT,
+                VK_C,
+            ):
+                self._running = False
+                self._startup_event.set()
+                return
+
+            self._startup_ok = True
+            self._startup_event.set()
+
+            msg = ctypes.wintypes.MSG()
+            while self._running:
+                ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+                if ret in (0, -1):
+                    break
+                if msg.message == WM_APP_QUIT:
+                    break
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+        finally:
+            self._startup_event.set()
+            if self._hwnd:
+                user32.UnregisterHotKey(self._hwnd, HOTKEY_TOGGLE)
+                user32.DestroyWindow(self._hwnd)
+                self._hwnd = None
+            user32.UnregisterClassW(class_name, hinstance)
+            self._running = False
+
+    def _wndproc(self, hwnd, msg, wparam, lparam):
+        if msg == WM_HOTKEY and wparam == HOTKEY_TOGGLE:
+            self.activated.emit()
+            return 0
+        if msg == WM_DESTROY:
+            return 0
+        return user32.DefWindowProcW(hwnd, msg, wparam, _coerce_lparam(lparam))
 
 
 class ConfigManager:
@@ -171,8 +319,8 @@ class MiniCopier(QWidget):
         # Hotkey Worker
         self.hotkey_worker = HotkeyWorker()
         self.hotkey_worker.activated.connect(self.toggle_window)
-        self.hotkey_worker.escape_pressed.connect(self.hide_if_visible)
         self.hotkey_available = self.hotkey_worker.start()
+        QApplication.instance().aboutToQuit.connect(self.hotkey_worker.stop)
         if not self.hotkey_available:
             QTimer.singleShot(0, self.show_window)
 
