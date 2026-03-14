@@ -552,6 +552,7 @@ class ClientApp(QWidget):
         self.last_active_window_handle = None
         self.current_search_query = ""
         self._is_refreshing = False  # Guard for changeEvent during refresh
+        self._paste_in_progress = False
 
         # Init UI
         self.initUI()
@@ -954,29 +955,32 @@ class ClientApp(QWidget):
             self.handle_paste(data)
 
     def handle_paste(self, data):
+        if self._paste_in_progress or not data or "content" not in data:
+            return
+
+        self._paste_in_progress = True
         self._set_pending_clipboard_guard(data)
+        self.input_locked = True
 
-        # Clear search after paste
-        self.search_input.clear()
-        self.current_search_query = ""
+        try:
+            if data["type"] == "text":
+                self.clipboard.setText(data["content"])
+            else:
+                p = os.path.join(IMAGE_DIR, data["content"])
+                if not os.path.exists(p):
+                    self._finish_paste_attempt(clear_guard=True)
+                    return
+                pixmap = QPixmap(p)
+                if pixmap.isNull():
+                    self._finish_paste_attempt(clear_guard=True)
+                    return
+                self.clipboard.setPixmap(pixmap)
+        except Exception:
+            self._finish_paste_attempt(clear_guard=True)
+            return
 
-        if data["type"] == "text":
-            self.clipboard.setText(data["content"])
-        else:
-            p = os.path.join(IMAGE_DIR, data["content"])
-            if os.path.exists(p):
-                self.clipboard.setPixmap(QPixmap(p))
-        QApplication.processEvents()
         self.hide()
-
-        # Reset scroll to top so next open starts at the beginning
-        self.list_history.verticalScrollBar().setValue(0)
-        self.list_pinned.verticalScrollBar().setValue(0)
-        if sys.platform == "win32" and self.last_active_window_handle:
-            try:
-                ctypes.windll.user32.SetForegroundWindow(self.last_active_window_handle)
-            except:
-                pass
+        QTimer.singleShot(0, self._reset_ui_after_paste_request)
         QTimer.singleShot(10, lambda: self._restore_focus_and_paste(12))
 
     def _perform_keyboard_paste(self):
@@ -985,6 +989,20 @@ class ClientApp(QWidget):
             simulate_paste()
         except Exception:
             pass
+        finally:
+            self._finish_paste_attempt()
+
+    def _reset_ui_after_paste_request(self):
+        self.search_input.clear()
+        self.current_search_query = ""
+        self.list_history.verticalScrollBar().setValue(0)
+        self.list_pinned.verticalScrollBar().setValue(0)
+
+    def _finish_paste_attempt(self, clear_guard=False):
+        if clear_guard:
+            self.pending_clipboard_guard = None
+        self._paste_in_progress = False
+        self.input_locked = False
 
     def _restore_focus_and_paste(self, attempts_remaining):
         target_hwnd = self.last_active_window_handle if sys.platform == "win32" else None
