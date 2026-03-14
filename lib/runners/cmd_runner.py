@@ -1,23 +1,18 @@
 """
 CmdRunner — type: "cmd"
 
-Mô phỏng CHÍNH XÁC hành vi user mở CMD/Terminal rồi gõ lệnh.
-
-User gõ:   cd E:/git-project/openclaw; pnpm openclaw --profile repo gateway
-Code chạy: subprocess.Popen("cd /d \"E:\\path\" && pnpm ...", shell=True)
-            với env=full system PATH (System32, Node, pnpm, etc.)
+Trên Windows, runner này mô phỏng hành vi user mở PowerShell rồi gõ lệnh.
 
 Hỗ trợ:
-- `;` hoặc `&&` để nối lệnh → normalized to `&&` on Windows
-- Tự detect `cd <path>` đầu tiên → dùng làm subprocess cwd (cho log placement)
-- Kế thừa TOÀN BỘ system PATH (System32, PowerShell, Node, pnpm, etc.)
-- shell=True → command string passed as-is to cmd.exe (no quoting issues)
+- Tự detect `cd <path>` đầu tiên để suy ra cwd
+- Chuyển `cd` đầu tiên thành `Set-Location` của PowerShell
+- Thực thi qua `pwsh`/`powershell` thay vì `cmd.exe`
 """
 
 import os
 import re
 from .base import BaseRunner
-from ..utils import is_windows
+from ..utils import build_powershell_command, is_windows, quote_powershell
 
 
 def _split_statements(command: str) -> list[str]:
@@ -81,7 +76,7 @@ class CmdRunner(BaseRunner):
         super().__init__(app_config, global_config)
         self._parsed = False
         self._detected_workdir: str | None = None
-        self._built_cmd_str: str = ""
+        self._built_cmd: str | list[str] = ""
 
     def _parse_command(self):
         """Parse command string 1 lần, cache kết quả."""
@@ -96,28 +91,30 @@ class CmdRunner(BaseRunner):
         cd_path, remaining = _extract_cd_workdir(statements)
 
         if cd_path:
-            # Normalize path cho Windows
             self._detected_workdir = os.path.normpath(cd_path)
 
-            # Build command string: cd /d "path" && rest
-            chain = []
-            if is_windows():
-                chain.append(f'cd /d "{self._detected_workdir}"')
-            else:
-                chain.append(f'cd "{self._detected_workdir}"')
-
+        if is_windows():
+            ps_statements = []
+            if self._detected_workdir:
+                ps_statements.append(
+                    f"Set-Location -LiteralPath {quote_powershell(self._detected_workdir)}"
+                )
+            ps_statements.extend(remaining if cd_path else statements)
+            self._built_cmd = build_powershell_command(
+                "; ".join(p for p in ps_statements if p.strip())
+            )
+        elif cd_path:
+            chain = [f'cd "{self._detected_workdir}"']
             chain.extend(remaining)
-            self._built_cmd_str = " && ".join(p for p in chain if p.strip())
+            self._built_cmd = " && ".join(p for p in chain if p.strip())
         else:
-            # Không có cd, dùng toàn bộ command gốc
-            # Normalize separator sang && cho Windows nếu user dùng ;
-            self._built_cmd_str = " && ".join(p for p in statements if p.strip())
+            self._built_cmd = " && ".join(p for p in statements if p.strip())
 
         self._parsed = True
 
-    def build_command(self) -> str:
+    def build_command(self) -> str | list[str]:
         self._parse_command()
-        return self._built_cmd_str
+        return self._built_cmd
 
     def get_workdir(self) -> str | None:
         # Ưu tiên: config workdir > detected cd workdir
@@ -128,5 +125,4 @@ class CmdRunner(BaseRunner):
         return self._detected_workdir
 
     def should_use_shell(self) -> bool:
-        # Luôn dùng shell=True cho type: "cmd" để xử lý chuỗi lệnh phức tạp
-        return True
+        return not is_windows()

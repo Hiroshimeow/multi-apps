@@ -1,5 +1,5 @@
 from .base import BaseRunner
-from ..utils import is_windows
+from ..utils import build_powershell_command, is_windows
 import shlex
 
 class CommandRunner(BaseRunner):
@@ -9,12 +9,9 @@ class CommandRunner(BaseRunner):
             raise ValueError(f"Command not specified for app '{self.name}'")
             
         if is_windows():
-            # On Windows, we often want to pass the raw string to Popen(shell=True)
-            # but SubprocessSessionManager expects a list.
-            # If we use shell=True, we can pass either.
-            return command
+            return build_powershell_command(command)
             
         return shlex.split(command)
 
     def should_use_shell(self):
-        return is_windows()
+        return False

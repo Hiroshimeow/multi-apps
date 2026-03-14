@@ -75,6 +75,45 @@ def resolve_path(path_str, base_dir=None):
     return str(path.resolve())
 
 
+def get_powershell_executable():
+    """Prefer PowerShell 7, fallback to Windows PowerShell."""
+    if not is_windows():
+        return None
+
+    candidates = [
+        r"C:\Program Files\PowerShell\7\pwsh.exe",
+        shutil.which("pwsh"),
+        shutil.which("powershell"),
+        os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"),
+            "System32",
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe",
+        ),
+    ]
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+
+    return "powershell"
+
+
+def quote_powershell(value: str) -> str:
+    """Quote a literal value for PowerShell single-quoted strings."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def build_powershell_command(command: str) -> list[str]:
+    """Run a command string via PowerShell to mimic interactive shell semantics."""
+    exe = get_powershell_executable()
+    if not exe:
+        raise RuntimeError("PowerShell is not available on this platform.")
+
+    return [exe, "-NoLogo", "-ExecutionPolicy", "Bypass", "-Command", command]
+
+
 def get_conda_base_path():
     """
     Attempt to find Conda base path.

@@ -1,5 +1,5 @@
 from .base import BaseRunner
-from ..utils import resolve_path, is_windows
+from ..utils import build_powershell_command, resolve_path
 import os
 
 
@@ -8,7 +8,8 @@ class UvRunner(BaseRunner):
         # 1. Hỗ trợ cmd: "cd xxx & uv run yy"
         command = self.app_config.get("command") or self.app_config.get("cmd")
         if command:
-            # Nếu là chuỗi lệnh phức tạp, trả về chuỗi để dùng shell=True
+            if os.name == "nt":
+                return build_powershell_command(command)
             return command
 
         # 2. Hỗ trợ chạy path thông thường
@@ -55,8 +56,4 @@ class UvRunner(BaseRunner):
         return env
 
     def should_use_shell(self):
-        # Bắt buộc dùng shell nếu có lệnh cmd phức tạp (chuỗi lệnh)
-        if self.app_config.get("command") or self.app_config.get("cmd"):
-            return True
-        # Đối với list-based commands (uv run path), không dùng shell để tránh overhead
         return False
