@@ -54,7 +54,7 @@ from PyQt6.QtGui import (
 )
 
 # Pure Win32 clipboard monitor & hotkey (no pynput, no keyboard hooks)
-from win32_monitor import Win32ClipboardMonitor, simulate_paste
+from win32_monitor import Win32ClipboardMonitor, VK_CONTROL, VK_MENU, simulate_paste
 
 # Import storage and backup modules
 from storage import get_storage, ClipboardStorage
@@ -546,7 +546,7 @@ class ClientApp(QWidget):
         self.group_headers = {}  # group_name -> QListWidgetItem
 
         # UI state
-        self.ignore_clipboard_change = False
+        self.pending_clipboard_guard = None
         self.is_ui_dirty = True
         self.input_locked = False
         self.last_active_window_handle = None
@@ -954,7 +954,7 @@ class ClientApp(QWidget):
             self.handle_paste(data)
 
     def handle_paste(self, data):
-        self.ignore_clipboard_change = True
+        self._set_pending_clipboard_guard(data)
 
         # Clear search after paste
         self.search_input.clear()
@@ -977,7 +977,7 @@ class ClientApp(QWidget):
                 ctypes.windll.user32.SetForegroundWindow(self.last_active_window_handle)
             except:
                 pass
-        QTimer.singleShot(150, self._perform_keyboard_paste)
+        QTimer.singleShot(10, lambda: self._restore_focus_and_paste(12))
 
     def _perform_keyboard_paste(self):
         """Simulate Ctrl+V using pure Win32 keybd_event (no pynput)."""
@@ -985,10 +985,45 @@ class ClientApp(QWidget):
             simulate_paste()
         except Exception:
             pass
-        finally:
+
+    def _restore_focus_and_paste(self, attempts_remaining):
+        target_hwnd = self.last_active_window_handle if sys.platform == "win32" else None
+        if sys.platform == "win32" and target_hwnd:
+            user32 = ctypes.windll.user32
+            foreground_hwnd = user32.GetForegroundWindow()
+            if foreground_hwnd != target_hwnd:
+                try:
+                    ft = user32.GetWindowThreadProcessId(foreground_hwnd, None)
+                    tt = user32.GetWindowThreadProcessId(target_hwnd, None)
+                    user32.AttachThreadInput(ft, tt, True)
+                    user32.SetForegroundWindow(target_hwnd)
+                    user32.SetFocus(target_hwnd)
+                    user32.AttachThreadInput(ft, tt, False)
+                except Exception:
+                    pass
+
+        if attempts_remaining > 0 and not self._ready_to_paste():
             QTimer.singleShot(
-                500, lambda: setattr(self, "ignore_clipboard_change", False)
+                20, lambda: self._restore_focus_and_paste(attempts_remaining - 1)
             )
+            return
+
+        self._perform_keyboard_paste()
+
+    def _ready_to_paste(self):
+        if sys.platform != "win32":
+            return True
+
+        user32 = ctypes.windll.user32
+        ctrl_down = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+        alt_down = bool(user32.GetAsyncKeyState(VK_MENU) & 0x8000)
+        if ctrl_down or alt_down:
+            return False
+
+        target_hwnd = self.last_active_window_handle
+        if target_hwnd:
+            return user32.GetForegroundWindow() == target_hwnd
+        return True
 
     def handle_move(self, clip_id, direction, is_pinned):
         """Move clip up/down."""
@@ -1016,27 +1051,22 @@ class ClientApp(QWidget):
         self.refresh_lists()
 
     def on_clipboard_change_delayed(self):
-        """Delay reading clipboard by 50ms to ensure the source app has finished writing to it."""
-        if self.ignore_clipboard_change:
-            return
-        # Khi nhấn Ctrl+C, Win32 phát sự kiện WM_CLIPBOARDUPDATE ngay lập tức,
-        # lúc này ứng dụng copy (Chrome/Word) có thể vẫn đang KHÓA (lock) clipboard
-        # hoặc chưa ghi xong dữ liệu. Qt đọc ngay sẽ bị rỗng (empty).
-        # -> Chờ 50ms để dữ liệu sẵn sàng.
-        QTimer.singleShot(50, self._process_clipboard_data)
+        """Delay reading clipboard slightly so source apps can finish publishing data."""
+        QTimer.singleShot(15, lambda: self._process_clipboard_data_retry(0))
 
     def _process_clipboard_data(self):
-        self._process_clipboard_data_retry(remaining_attempts=3)
+        self._process_clipboard_data_retry(0)
 
-    def _process_clipboard_data_retry(self, remaining_attempts):
-        if self.ignore_clipboard_change:
-            return
+    def _process_clipboard_data_retry(self, attempt_index):
+        retry_delays = (15, 35, 75, 120)
 
         mime = None
         has_content = False
 
         # QClipboard is sometimes unreliable immediately after WM_CLIPBOARDUPDATE
         mime = self.clipboard.mimeData()
+        if self._should_ignore_clipboard_update(mime):
+            return
 
         # Check if it has actual content (sometimes hasText is true but text is empty)
         if mime:
@@ -1046,10 +1076,11 @@ class ClientApp(QWidget):
                 has_content = True
 
         if not has_content:
-            if remaining_attempts > 1:
+            next_attempt = attempt_index + 1
+            if next_attempt < len(retry_delays):
                 QTimer.singleShot(
-                    100,
-                    lambda: self._process_clipboard_data_retry(remaining_attempts - 1),
+                    retry_delays[next_attempt],
+                    lambda: self._process_clipboard_data_retry(next_attempt),
                 )
             else:
                 print(
@@ -1090,16 +1121,52 @@ class ClientApp(QWidget):
             self.is_ui_dirty = True
 
     def save_image_if_new(self, img):
+        fn = self._image_storage_name(img)
+        fp = os.path.join(IMAGE_DIR, fn)
+        if not os.path.exists(fp):
+            img.save(fp, "PNG")
+        return fn
+
+    def _image_storage_name(self, img):
         ba = QByteArray()
         buf = QBuffer(ba)
         buf.open(QIODevice.OpenModeFlag.WriteOnly)
         img.save(buf, "PNG")
         ih = hashlib.md5(ba.data()).hexdigest()
-        fn = f"{ih}.png"
-        fp = os.path.join(IMAGE_DIR, fn)
-        if not os.path.exists(fp):
-            img.save(fp, "PNG")
-        return fn
+        return f"{ih}.png"
+
+    def _set_pending_clipboard_guard(self, data):
+        self.pending_clipboard_guard = {
+            "type": data["type"],
+            "content": data["content"],
+            "expires_at": time.monotonic() + 1.5,
+        }
+
+    def _clear_pending_clipboard_guard_if_expired(self):
+        if (
+            self.pending_clipboard_guard
+            and time.monotonic() > self.pending_clipboard_guard["expires_at"]
+        ):
+            self.pending_clipboard_guard = None
+
+    def _should_ignore_clipboard_update(self, mime):
+        self._clear_pending_clipboard_guard_if_expired()
+        guard = self.pending_clipboard_guard
+        if not guard or not mime:
+            return False
+
+        if guard["type"] == "text" and mime.hasText():
+            if mime.text() == guard["content"]:
+                self.pending_clipboard_guard = None
+                return True
+        elif guard["type"] == "image" and mime.hasImage():
+            img = QImage(mime.imageData())
+            if not img.isNull() and self._image_storage_name(img) == guard["content"]:
+                self.pending_clipboard_guard = None
+                return True
+
+        self.pending_clipboard_guard = None
+        return False
 
     def refresh_lists(self):
         """Refresh both lists from SQLite with pagination reset."""
@@ -1205,14 +1272,13 @@ class ClientApp(QWidget):
         self.list_pinned.verticalScrollBar().setValue(p_s)
 
     def handle_copy_only(self, data):
-        self.ignore_clipboard_change = True
+        self._set_pending_clipboard_guard(data)
         if data["type"] == "text":
             self.clipboard.setText(data["content"])
         else:
             p = os.path.join(IMAGE_DIR, data["content"])
             if os.path.exists(p):
                 self.clipboard.setPixmap(QPixmap(p))
-        QTimer.singleShot(800, lambda: setattr(self, "ignore_clipboard_change", False))
 
     def handle_star(self, clip_id, should_pin):
         """Pin or unpin a clip."""

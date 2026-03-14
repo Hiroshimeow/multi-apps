@@ -38,7 +38,7 @@ WM_APP_QUIT = WM_USER + 1  # Custom message to stop the loop
 
 # Virtual key codes
 VK_CONTROL = 0x11
-VK_MENU = 0x14  # Alt key
+VK_MENU = 0x12  # Alt key
 VK_V = 0x56
 VK_ESCAPE = 0x1B
 
