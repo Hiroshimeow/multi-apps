@@ -2,8 +2,7 @@
 import argparse
 import sys
 from lib.core import AppController
-from lib.tui.menu import InteractiveMenu
-from lib.utils import print_info
+from lib.utils import is_windows, print_error
 
 def main():
     parser = argparse.ArgumentParser(description="Multi-Run Apps Manager")
@@ -18,6 +17,10 @@ def main():
     
     # 1. Interactive Mode
     if not args.command:
+        if is_windows():
+            print_error("Interactive TUI mode is only supported on Linux terminals.")
+            sys.exit(1)
+        from lib.tui.menu import InteractiveMenu
         menu = InteractiveMenu(controller)
         menu.run()
         return

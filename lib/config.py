@@ -1,6 +1,7 @@
 import yaml
 import os
-from typing import Dict, Any, List
+from copy import deepcopy
+from typing import Dict, Any
 from .utils import print_error, print_warning, resolve_path, is_linux, is_windows
 
 DEFAULT_CONFIG_PATH = "setting.yaml"
@@ -27,7 +28,8 @@ class ConfigManager:
             script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             config_path = os.path.join(script_dir, DEFAULT_CONFIG_PATH)
 
-        self.config_path = resolve_path(config_path) or config_path
+        self.config_path = os.path.abspath(resolve_path(config_path) or config_path)
+        self.config_dir = os.path.dirname(self.config_path)
         self.config = {}
         self.load()
 
@@ -59,7 +61,7 @@ class ConfigManager:
         # Legacy: 'default_conda_env' at root
         # New: 'global' -> 'default_conda_env'
 
-        global_cfg = DEFAULT_GLOBAL_CONFIG.copy()
+        global_cfg = deepcopy(DEFAULT_GLOBAL_CONFIG)
 
         # Merge existing global config if present
         if "global" in raw_config:
@@ -70,6 +72,7 @@ class ConfigManager:
             global_cfg["default_conda_env"] = raw_config["default_conda_env"]
         if "multi_run" in raw_config:
             global_cfg["multi_run"] = raw_config["multi_run"]
+        global_cfg["_config_dir"] = self.config_dir
 
         normalized["global"] = global_cfg
 
@@ -104,16 +107,25 @@ class ConfigManager:
             return None
 
         # Defaults
+        path = resolve_path(path, self.config_dir) if path else None
+        workdir = app.get("workdir")
+        if workdir:
+            workdir = resolve_path(workdir, self.config_dir)
+
+        env = app.get("env")
+        if isinstance(env, dict) and env.get("type") == "venv" and env.get("path"):
+            env = {**env, "path": resolve_path(env["path"], self.config_dir)}
+
         norm = {
             "name": name,
             "type": app.get("type", "python"),  # Default type is python (legacy)
-            "path": app.get("path"),
+            "path": path,
             "command": app.get("command"),
             "enabled": app.get("enabled", True),
             "multi_run": app.get("multi_run", global_cfg["multi_run"]),
             "background": app.get("background", True),
-            "workdir": app.get("workdir"),
-            "env": app.get("env"),
+            "workdir": workdir,
+            "env": env,
             "args": app.get("args") or [],
             "env_vars": app.get("env_vars") or {},
             "session": app.get("session"),  # Override global session type
@@ -132,7 +144,7 @@ class ConfigManager:
         if not norm["workdir"] and norm["path"]:
             # If path is a file, workdir is parent
             # If path is dir (e.g. gunicorn root), workdir is path
-            path_obj = resolve_path(norm["path"])
+            path_obj = resolve_path(norm["path"], self.config_dir)
             if path_obj and os.path.isdir(path_obj):
                 norm["workdir"] = path_obj
             elif path_obj:
@@ -153,6 +165,10 @@ class ConfigManager:
 
     def get_global(self, key, default=None):
         return self.config.get("global", {}).get(key, default)
+
+    def get_log_dir(self):
+        log_dir = self.get_global("log", {}).get("dir", "./logs")
+        return resolve_path(log_dir, self.config_dir)
 
     def get_apps(self, enabled_only=False):
         apps = self.config.get("apps", [])

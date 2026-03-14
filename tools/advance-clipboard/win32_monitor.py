@@ -91,6 +91,16 @@ user32.DefWindowProcW.argtypes = [
 user32.DefWindowProcW.restype = LRESULT
 
 
+def _coerce_lparam(value):
+    """Normalize callback values into a signed LPARAM-sized integer."""
+    bits = ctypes.sizeof(ctypes.c_void_p) * 8
+    mask = (1 << bits) - 1
+    value &= mask
+    if value >= (1 << (bits - 1)):
+        value -= 1 << bits
+    return value
+
+
 class WNDCLASSEX(ctypes.Structure):
     _fields_ = [
         ("cbSize", ctypes.wintypes.UINT),
@@ -262,7 +272,7 @@ class Win32ClipboardMonitor(QObject):
         elif msg == WM_DESTROY:
             return 0
 
-        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+        return user32.DefWindowProcW(hwnd, msg, wparam, _coerce_lparam(lparam))
 
 
 def simulate_paste():

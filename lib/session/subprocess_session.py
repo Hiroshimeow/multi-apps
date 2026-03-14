@@ -18,25 +18,31 @@ class SubprocessSessionManager(BaseSessionManager):
         self.processes = {}
 
     def _cleanup_dead(self):
-        dead_apps = [
-            name
-            for name, info in self.processes.items()
-            if info["process"].poll() is not None
-        ]
+        dead_apps = []
+        for name, infos in self.processes.items():
+            alive_infos = []
+            for info in infos:
+                if info["process"].poll() is None:
+                    alive_infos.append(info)
+                    continue
+                for handle in ["stdout", "stderr"]:
+                    if handle in info:
+                        try:
+                            info[handle].close()
+                        except Exception:
+                            pass
+            if alive_infos:
+                self.processes[name] = alive_infos
+            else:
+                dead_apps.append(name)
         for name in dead_apps:
-            info = self.processes.pop(name)
-            for handle in ["stdout", "stderr"]:
-                if handle in info:
-                    try:
-                        info[handle].close()
-                    except Exception:
-                        pass
+            self.processes.pop(name, None)
 
     def start(self, runner):
         self._cleanup_dead()
         app_name = runner.name
 
-        if self.is_running(app_name):
+        if self.is_running(app_name) and not runner.app_config.get("multi_run", False):
             return False, f"App '{app_name}' is already running."
 
         cmd = runner.build_command()
@@ -49,11 +55,9 @@ class SubprocessSessionManager(BaseSessionManager):
         global_log_dir = self.config.get("log", {}).get("dir", "./logs")
 
         # Resolve log dir relative to launcher root if it's relative
-        launcher_root = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
+        config_dir = self.config.get("_config_dir") or os.getcwd()
         if not os.path.isabs(global_log_dir):
-            log_dir = os.path.abspath(os.path.join(launcher_root, global_log_dir))
+            log_dir = os.path.abspath(os.path.join(config_dir, global_log_dir))
         else:
             log_dir = global_log_dir
 
@@ -84,13 +88,13 @@ class SubprocessSessionManager(BaseSessionManager):
                 shell=use_shell,
             )
 
-            self.processes[app_name] = {
+            self.processes.setdefault(app_name, []).append({
                 "process": process,
                 "start_time": datetime.now(),
                 "pid": process.pid,
                 "stdout": stdout_file,
                 "stderr": stderr_file,
-            }
+            })
             return True, f"Started with PID {process.pid}"
         except Exception as e:
             stdout_file.close()
@@ -101,53 +105,42 @@ class SubprocessSessionManager(BaseSessionManager):
         if app_name not in self.processes:
             return False, "App not found in session manager."
 
-        info = self.processes.pop(app_name)
-        process = info["process"]
-        pid = process.pid
+        infos = self.processes.pop(app_name)
+        failures = []
 
-        try:
-            kill_process_tree(pid)
+        for info in infos:
+            process = info["process"]
+            pid = process.pid
+
             try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-            return True, "Stopped."
-        except Exception as e:
-            return False, f"Error stopping: {e}"
-        finally:
-            for handle in ["stdout", "stderr"]:
-                if handle in info:
-                    try:
-                        info[handle].close()
-                    except Exception:
-                        pass
+                kill_process_tree(pid)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+            except Exception as e:
+                failures.append(str(e))
+            finally:
+                for handle in ["stdout", "stderr"]:
+                    if handle in info:
+                        try:
+                            info[handle].close()
+                        except Exception:
+                            pass
+
+        if failures:
+            return False, "; ".join(failures)
+        return True, "Stopped."
 
     def is_running(self, app_name):
-        if app_name not in self.processes:
-            return False
-        proc = self.processes[app_name]["process"]
-        if proc.poll() is None:
-            return True
-        else:
-            info = self.processes[app_name]
-            if "stdout" in info:
-                try:
-                    info["stdout"].close()
-                except Exception:
-                    pass
-            if "stderr" in info:
-                try:
-                    info["stderr"].close()
-                except Exception:
-                    pass
-
-            del self.processes[app_name]
-            return False
+        self._cleanup_dead()
+        return app_name in self.processes and bool(self.processes[app_name])
 
     def get_info(self, app_name):
         if not self.is_running(app_name):
             return {"status": "STOPPED"}
-        info = self.processes[app_name]
+        infos = self.processes[app_name]
+        info = min(infos, key=lambda item: item["start_time"])
         uptime = datetime.now() - info["start_time"]
         days = uptime.days
         hours, remainder = divmod(uptime.seconds, 3600)
@@ -155,6 +148,7 @@ class SubprocessSessionManager(BaseSessionManager):
         return {
             "status": "RUNNING",
             "pid": info["pid"],
+            "instances": len(infos),
             "uptime": f"{days}d {hours}h {minutes}m {seconds}s",
             "start_time": info["start_time"].strftime("%Y-%m-%d %H:%M:%S"),
         }

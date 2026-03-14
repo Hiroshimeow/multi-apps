@@ -3,6 +3,7 @@ import os
 import time
 import datetime
 import signal
+import shlex
 from .base import BaseSessionManager
 from ..utils import resolve_path, ensure_dir
 
@@ -21,7 +22,7 @@ class TmuxSessionManager(BaseSessionManager):
     def _run_tmux(self, args):
         try:
             return subprocess.check_output(['tmux'] + args, text=True, stderr=subprocess.DEVNULL).strip()
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
     def is_running(self, app_name):
@@ -36,10 +37,13 @@ class TmuxSessionManager(BaseSessionManager):
         if self.is_running(app_name):
             return False, "Session already exists"
             
-        cmd_list = runner.build_command()
+        command = runner.build_command()
         
         # Prepare Log
-        log_dir = resolve_path(self.config.get('log', {}).get('dir', './logs'))
+        log_dir = resolve_path(
+            self.config.get('log', {}).get('dir', './logs'),
+            self.config.get("_config_dir"),
+        )
         ensure_dir(log_dir)
         
         date_str = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -48,25 +52,29 @@ class TmuxSessionManager(BaseSessionManager):
         
         # Construct full shell command with logging
         # We need to quote arguments properly for shell execution inside tmux
-        import shlex
-        cmd_str = ' '.join(shlex.quote(str(arg)) for arg in cmd_list)
-        full_cmd = f"{cmd_str} >> {shlex.quote(log_file)} 2>&1"
-        
+        if isinstance(command, str):
+            cmd_str = command
+        else:
+            cmd_str = ' '.join(shlex.quote(str(arg)) for arg in command)
+
         # Get Environment
         env_vars = runner.get_env()
-        env_cmds = []
-        for k, v in env_vars.items():
-            env_cmds.append(f"export {k}={shlex.quote(str(v))}")
-        
+        env_cmds = [f"export {k}={shlex.quote(str(v))}" for k, v in env_vars.items()]
+
         # Working Directory
         workdir = runner.get_workdir()
+        full_cmd_parts = env_cmds + [f"{cmd_str} >> {shlex.quote(log_file)} 2>&1"]
+        full_cmd = " && ".join(part for part in full_cmd_parts if part)
         
         # Create session detached
         # -d: detached
         # -s: session name
         # -c: working dir
         try:
-            subprocess.run(['tmux', 'new-session', '-d', '-s', sname, '-c', workdir], check=True)
+            tmux_cmd = ['tmux', 'new-session', '-d', '-s', sname]
+            if workdir:
+                tmux_cmd.extend(['-c', workdir])
+            subprocess.run(tmux_cmd, check=True)
             
             # Run app command directly (without exporting all env vars)
             subprocess.run(['tmux', 'send-keys', '-t', sname, full_cmd, 'C-m'], check=True)

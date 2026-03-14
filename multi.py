@@ -57,8 +57,9 @@ class AppManager:
         cannot be located.  The new UI exposes separate buttons for
         output and error logs.
         """
-        workdir = self.app_config.get("workdir") or os.getcwd()
-        log_dir = os.path.join(workdir, "logs")
+        log_dir = self.controller.config_manager.get_log_dir() or os.path.join(
+            os.getcwd(), "logs"
+        )
         if os.path.exists(log_dir):
             if is_windows():
                 os.startfile(log_dir)
@@ -67,8 +68,9 @@ class AppManager:
 
     def view_output_log(self):
         """Open the application's stdout log file if present."""
-        workdir = self.app_config.get("workdir") or os.getcwd()
-        log_dir = os.path.join(workdir, "logs")
+        log_dir = self.controller.config_manager.get_log_dir() or os.path.join(
+            os.getcwd(), "logs"
+        )
         out_path = os.path.join(log_dir, f"{self.name}.out.log")
         if os.path.exists(out_path):
             if is_windows():
@@ -81,8 +83,9 @@ class AppManager:
 
     def view_error_log(self):
         """Open the application's stderr log file if present."""
-        workdir = self.app_config.get("workdir") or os.getcwd()
-        log_dir = os.path.join(workdir, "logs")
+        log_dir = self.controller.config_manager.get_log_dir() or os.path.join(
+            os.getcwd(), "logs"
+        )
         err_path = os.path.join(log_dir, f"{self.name}.err.log")
         if os.path.exists(err_path):
             if is_windows():

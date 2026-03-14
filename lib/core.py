@@ -96,12 +96,6 @@ class AppController:
             print_error("Session manager not initialized.")
             return False
 
-        if self.session_manager.is_running(app_name):
-            # TODO: Handle interactive choice (Keep/Restart)
-            # For now, just warn
-            print_warning(f"App '{app_name}' is already running.")
-            return False
-
         runner = self._get_runner(app_config)
         try:
             success, msg = self.session_manager.start(runner)

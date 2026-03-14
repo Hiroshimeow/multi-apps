@@ -30,9 +30,15 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer, QEvent
 from PyQt6.QtGui import QAction, QCursor, QGuiApplication
 
-# Sử dụng pynput cho cả Hotkey và Keyboard Control để tránh kẹt phím
-from pynput import keyboard
-from pynput.keyboard import Key, Controller as KeyboardController
+try:
+    from pynput import keyboard
+    from pynput.keyboard import Key
+
+    HAS_PYNPUT = True
+except ImportError:
+    keyboard = None
+    Key = None
+    HAS_PYNPUT = False
 
 # --- Cố gắng import thư viện lấy Path Windows ---
 try:
@@ -77,7 +83,9 @@ QPushButton#closeBtn {
 QPushButton#closeBtn:hover { color: #ff5555; }
 """
 
-CONFIG_FILE = "copy-content-config.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "copy-content-config.json")
+OUTPUT_FILE = os.path.join(BASE_DIR, "copy-content.txt")
 
 # --- Worker xử lý Hotkey (Theo phong cách auto-suggest) ---
 class HotkeyWorker(QObject):
@@ -90,6 +98,8 @@ class HotkeyWorker(QObject):
         self.listener = None
 
     def start(self):
+        if not HAS_PYNPUT:
+            return False
         # Lắng nghe tổ hợp phím Ctrl+Alt+C
         self.hotkeys = keyboard.GlobalHotKeys({
             '<ctrl>+<alt>+c': self.on_activate
@@ -100,6 +110,7 @@ class HotkeyWorker(QObject):
         
         self.hotkeys.start()
         self.listener.start()
+        return True
 
     def on_activate(self):
         self.activated.emit()
@@ -153,7 +164,6 @@ class MiniCopier(QWidget):
         self.config_manager = ConfigManager(CONFIG_FILE)
         self.loading_config = False
         self.input_locked = False
-        self.kb_controller = KeyboardController()
 
         self.initUI()
         self.load_data_initial()
@@ -162,7 +172,9 @@ class MiniCopier(QWidget):
         self.hotkey_worker = HotkeyWorker()
         self.hotkey_worker.activated.connect(self.toggle_window)
         self.hotkey_worker.escape_pressed.connect(self.hide_if_visible)
-        self.hotkey_worker.start()
+        self.hotkey_available = self.hotkey_worker.start()
+        if not self.hotkey_available:
+            QTimer.singleShot(0, self.show_window)
 
     def initUI(self):
         self.setWindowTitle("Mini Copier")
@@ -354,6 +366,11 @@ class MiniCopier(QWidget):
 
         def split_trim(s): return [x.strip() for x in re.split(r"[,\n]+", s or "") if x.strip()]
         def norm_path(p): return os.path.normcase(os.path.abspath(p))
+        def is_same_or_child(path, base):
+            try:
+                return os.path.commonpath([path, base]) == base
+            except ValueError:
+                return False
 
         target_exts = set()
         is_all_ext = self.check_boxes["All"].isChecked()
@@ -387,12 +404,18 @@ class MiniCopier(QWidget):
                 d_abs = norm_path(os.path.join(current_abs, d))
                 if d.startswith(".") or d in ["__pycache__", "node_modules", "venv"]: continue
                 # Basic check for inclusion/exclusion
-                is_inc = any(d_abs.startswith(w) or w.startswith(d_abs) for w in include_dirs)
-                is_ig = ignore_all_mode or d_abs in ignore_paths or any(d_abs.startswith(ig + os.sep) for ig in ignore_paths)
+                is_inc = any(is_same_or_child(d_abs, w) or is_same_or_child(w, d_abs) for w in include_dirs)
+                is_ig = ignore_all_mode or d_abs in ignore_paths or any(is_same_or_child(d_abs, ig) for ig in ignore_paths)
                 if is_inc or not is_ig: allowed_dirs.append(d)
             dirs[:] = allowed_dirs
 
-            if not (ignore_all_mode or any(current_abs.startswith(ig) for ig in ignore_paths)) or any(current_abs.startswith(w) for w in include_dirs):
+            ignored_current = ignore_all_mode or any(
+                is_same_or_child(current_abs, ig) for ig in ignore_paths
+            )
+            forced_include = any(
+                is_same_or_child(current_abs, w) for w in include_dirs
+            )
+            if not ignored_current or forced_include:
                 for file in files:
                     valid = is_all_ext or any(file.endswith(e) for e in target_exts) or any(fnmatch.fnmatch(file, pat) for pat in extra_exts)
                     if valid:
@@ -409,7 +432,7 @@ class MiniCopier(QWidget):
             final_text = "\n".join(content)
             QApplication.clipboard().setText(final_text)
             try:
-                with open("copy-content.txt", "w", encoding="utf-8") as f: f.write(final_text)
+                with open(OUTPUT_FILE, "w", encoding="utf-8") as f: f.write(final_text)
             except: pass
             self.btn_run.setText("OK")
             self.btn_run.setStyleSheet("background-color: #4ec9b0; color: #1e1e1e;")

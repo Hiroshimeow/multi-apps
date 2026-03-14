@@ -1026,33 +1026,36 @@ class ClientApp(QWidget):
         QTimer.singleShot(50, self._process_clipboard_data)
 
     def _process_clipboard_data(self):
+        self._process_clipboard_data_retry(remaining_attempts=3)
+
+    def _process_clipboard_data_retry(self, remaining_attempts):
         if self.ignore_clipboard_change:
             return
 
-        # Thử lấy mime data vài lần nếu thất bại (do ứng dụng khác vẫn đang lock clipboard)
-        max_retries = 3
         mime = None
         has_content = False
 
-        for attempt in range(max_retries):
-            # QClipboard is sometimes unreliable immediately after WM_CLIPBOARDUPDATE
-            mime = self.clipboard.mimeData()
+        # QClipboard is sometimes unreliable immediately after WM_CLIPBOARDUPDATE
+        mime = self.clipboard.mimeData()
 
-            # Check if it has actual content (sometimes hasText is true but text is empty)
-            has_content = False
-            if mime:
-                if mime.hasImage() and not mime.imageData().isNull():
-                    has_content = True
-                elif mime.hasText() and mime.text().strip():
-                    has_content = True
+        # Check if it has actual content (sometimes hasText is true but text is empty)
+        if mime:
+            if mime.hasImage() and not mime.imageData().isNull():
+                has_content = True
+            elif mime.hasText() and mime.text().strip():
+                has_content = True
 
-            if has_content:
-                break
-
-            # Nghỉ 100ms trước khi thử lại nếu clipboard trống hoặc không lấy được
-            import time
-
-            time.sleep(0.1)
+        if not has_content:
+            if remaining_attempts > 1:
+                QTimer.singleShot(
+                    100,
+                    lambda: self._process_clipboard_data_retry(remaining_attempts - 1),
+                )
+            else:
+                print(
+                    "[Win32Monitor] Warning: Received clipboard event but content is empty or unreadable after retries."
+                )
+            return
 
         if not has_content or not mime:
             print(

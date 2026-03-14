@@ -413,26 +413,30 @@ class ClipboardStorage:
                 clip_type = clip.get("type", "text")
                 tag = clip.get("tag", "")
                 is_pinned = 1 if clip.get("is_pinned", False) else 0
+                pin_order = clip.get("pin_order", 0)
+                group_name = clip.get("group_name", "")
                 content_hash = clip.get("hash") or self.compute_hash(content)
                 created_at = clip.get("created_at", datetime.now().isoformat())
                 updated_at = clip.get("updated_at", created_at)
 
                 try:
-                    conn.execute(
+                    cursor = conn.execute(
                         """INSERT OR IGNORE INTO clips 
-                           (type, content, hash, tag, is_pinned, created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                           (type, content, hash, tag, group_name, is_pinned, pin_order, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             clip_type,
                             content,
                             content_hash,
                             tag,
+                            group_name,
                             is_pinned,
+                            pin_order,
                             created_at,
                             updated_at,
                         ),
                     )
-                    count += 1
+                    count += cursor.rowcount
                 except sqlite3.IntegrityError:
                     pass  # Skip duplicates
 
