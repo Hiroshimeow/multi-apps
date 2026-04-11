@@ -303,6 +303,50 @@ class KeyboardNavigationTests(unittest.TestCase):
         app.close()
         QApplication.processEvents()
 
+    def test_ui_show_does_not_select_all_text_and_cursor_at_end(self):
+        _get_qapp()
+        app = _TestClientApp()
+        test_text = "some search query"
+        app.search_input.setText(test_text)
+
+        # Call show_at_cursor (which sets focus and position)
+        app.show_at_cursor()
+
+        self.assertFalse(app.search_input.hasSelectedText())
+        self.assertEqual(app.search_input.cursorPosition(), len(test_text))
+
+        app.backup_scheduler.cancel()
+        app.close()
+        QApplication.processEvents()
+
+    def test_ui_open_resets_selection_to_newest_item(self):
+        _get_qapp()
+        app = _TestClientApp()
+        # Mock storage with some items
+        history = [{"id": i, "type": "text", "content": f"item {i}"} for i in range(10)]
+        app.storage = _FakeStorage(history=history)
+        app.refresh_lists()
+
+        # Select item at index 5
+        app.list_history.setCurrentRow(5)
+        self.assertEqual(app.list_history.currentRow(), 5)
+
+        # Add new item to top of storage
+        new_item = {"id": 99, "type": "text", "content": "newest"}
+        app.storage._history.insert(0, new_item)
+
+        # Call show_at_cursor
+        app.show_at_cursor()
+
+        # Verify first item (the new one) is selected
+        self.assertEqual(app.list_history.currentRow(), 0)
+        cur_data = app.list_history.currentItem().data(Qt.ItemDataRole.UserRole)
+        self.assertEqual(cur_data["id"], 99)
+
+        app.backup_scheduler.cancel()
+        app.close()
+        QApplication.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1256,9 +1256,12 @@ class ClientApp(QWidget):
                 )
             except:
                 pass
-        if self.is_ui_dirty:
-            self.refresh_lists()
-            self.is_ui_dirty = False
+
+        # Always start on history side and reset selection to newest item
+        self.active_side = "history"
+        self.refresh_lists(force_reset_selection=True)
+        self.is_ui_dirty = False
+
         cp = QCursor.pos()
         w, h = self.width(), self.height()
         sc = QGuiApplication.screenAt(cp) or QGuiApplication.primaryScreen()
@@ -1287,7 +1290,7 @@ class ClientApp(QWidget):
         self.raise_()
         self.activateWindow()
         self.search_input.setFocus()
-        self.search_input.selectAll()
+        self.search_input.setCursorPosition(len(self.search_input.text()))
         self._on_ui_opened()
 
     def on_item_clicked(self, item):
@@ -1506,12 +1509,15 @@ class ClientApp(QWidget):
                 clip_id = d.get("id")
         return clip_id, row
 
-    def refresh_lists(self):
+    def refresh_lists(self, force_reset_selection=False):
         """Refresh both lists from SQLite with pagination reset."""
         active_widget = (
             self.list_history if self.active_side == "history" else self.list_pinned
         )
-        prev_clip_id, prev_row = self._get_current_selection_info(active_widget)
+        if force_reset_selection:
+            prev_clip_id, prev_row = None, -1
+        else:
+            prev_clip_id, prev_row = self._get_current_selection_info(active_widget)
 
         h_s, p_s = (
             self.list_history.verticalScrollBar().value(),
