@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 from contextlib import contextmanager
 
+from rag_search import LightRAGRetriever
+
 DB_FILE = os.path.join(os.path.dirname(__file__), "clipboard.db")
 
 # Thread-local storage for connections
@@ -50,7 +52,10 @@ class ClipboardStorage:
     _backup_callback = None
 
     def __init__(self):
+        self._search_revision = 0
+        self._retriever = LightRAGRetriever()
         self._init_db()
+        self._init_neural_tables()
 
     def _init_db(self):
         """Initialize database schema if not exists."""
@@ -84,6 +89,24 @@ class ClipboardStorage:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_group ON clips(group_name)")
 
+    def _init_neural_tables(self):
+        """Initialize neural search tables."""
+        with _transaction() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS neural_vectors (
+                    clip_id INTEGER PRIMARY KEY,
+                    vector BLOB
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS neural_links (
+                    source_id INTEGER,
+                    target_id INTEGER,
+                    weight REAL,
+                    PRIMARY KEY (source_id, target_id)
+                )
+            """)
+
     @staticmethod
     def compute_hash(content: str) -> str:
         """Compute MD5 hash for content."""
@@ -96,6 +119,8 @@ class ClipboardStorage:
     def _mark_dirty(self):
         """Mark that backup is needed."""
         ClipboardStorage._need_backup = True
+        self._search_revision += 1
+        self._retriever.invalidate()
         if self._backup_callback:
             self._backup_callback()
 
@@ -255,10 +280,6 @@ class ClipboardStorage:
                         "UPDATE clips SET pin_order = ? WHERE id = ?",
                         (current_order, target_id),
                     )
-                    conn.execute(
-                        "UPDATE clips SET pin_order = ? WHERE id = ?",
-                        (current_order, target["id"]),
-                    )
             else:
                 # For history, reorder by updated_at
                 clips = list(
@@ -363,13 +384,56 @@ class ClipboardStorage:
             "SELECT COUNT(*) FROM clips WHERE is_pinned = 1"
         ).fetchone()[0]
 
+    def _get_all_pinned_for_search(self) -> List[Dict[str, Any]]:
+        """Load full pinned corpus for hybrid retrieval."""
+        conn = _get_connection()
+        rows = conn.execute(
+            """SELECT id, type, content, hash, tag, group_name, created_at, updated_at
+               FROM clips WHERE is_pinned = 1
+               ORDER BY pin_order DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def _get_all_history_for_search(self) -> List[Dict[str, Any]]:
+        """Load full history corpus for hybrid retrieval."""
+        conn = _get_connection()
+        rows = conn.execute(
+            """SELECT id, type, content, hash, tag, created_at, updated_at
+               FROM clips WHERE is_pinned = 0
+               ORDER BY updated_at DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     @staticmethod
     def _split_search_terms(query: str) -> List[str]:
         """Split free-text query into normalized AND-search tokens."""
         return [term for term in re.split(r"\s+", (query or "").strip()) if term]
 
     def search_pinned(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """Search pinned clips by content, tag, or group_name."""
+        """Hybrid search for pinned clips using lexical + light RAG ranking."""
+        terms = self._split_search_terms(query)
+        if not terms:
+            return []
+
+        lexical_rows = self._search_pinned_sql(query, max(limit * 3, 20))
+        all_rows = self._get_all_pinned_for_search()
+        ranked_ids = self._retriever.search(
+            namespace="pinned",
+            revision=self._search_revision,
+            records=all_rows,
+            query=query,
+            limit=max(limit * 3, 20),
+            lexical_ids=[row["id"] for row in lexical_rows],
+        )
+        return self._merge_ranked_results(
+            ranked_ids=ranked_ids,
+            semantic_rows=all_rows,
+            lexical_rows=lexical_rows,
+            limit=limit,
+        )
+
+    def _search_pinned_sql(self, query: str, limit: int) -> List[Dict[str, Any]]:
+        """Baseline SQL search used as one signal in hybrid retrieval."""
         terms = self._split_search_terms(query)
         if not terms:
             return []
@@ -385,7 +449,7 @@ class ClipboardStorage:
         rows = conn.execute(
             f"""SELECT id, type, content, hash, tag, group_name, created_at, updated_at
                FROM clips WHERE is_pinned = 1
-               AND {' AND '.join(where_clauses)}
+               AND {" AND ".join(where_clauses)}
                ORDER BY pin_order DESC
                LIMIT ?""",
             params + [limit],
@@ -393,7 +457,30 @@ class ClipboardStorage:
         return [dict(r) for r in rows]
 
     def search_history(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """Search history clips by content."""
+        """Hybrid search for history clips using lexical + light RAG ranking."""
+        terms = self._split_search_terms(query)
+        if not terms:
+            return []
+
+        lexical_rows = self._search_history_sql(query, max(limit * 3, 20))
+        all_rows = self._get_all_history_for_search()
+        ranked_ids = self._retriever.search(
+            namespace="history",
+            revision=self._search_revision,
+            records=all_rows,
+            query=query,
+            limit=max(limit * 3, 20),
+            lexical_ids=[row["id"] for row in lexical_rows],
+        )
+        return self._merge_ranked_results(
+            ranked_ids=ranked_ids,
+            semantic_rows=all_rows,
+            lexical_rows=lexical_rows,
+            limit=limit,
+        )
+
+    def _search_history_sql(self, query: str, limit: int) -> List[Dict[str, Any]]:
+        """Baseline SQL search used as one signal in hybrid retrieval."""
         terms = self._split_search_terms(query)
         if not terms:
             return []
@@ -408,12 +495,43 @@ class ClipboardStorage:
         rows = conn.execute(
             f"""SELECT id, type, content, hash, tag, created_at, updated_at
                FROM clips WHERE is_pinned = 0
-               AND {' AND '.join(where_clauses)}
+               AND {" AND ".join(where_clauses)}
                ORDER BY updated_at DESC
                LIMIT ?""",
             params + [limit],
         ).fetchall()
         return [dict(r) for r in rows]
+
+    @staticmethod
+    def _merge_ranked_results(
+        *,
+        ranked_ids: List[int],
+        semantic_rows: List[Dict[str, Any]],
+        lexical_rows: List[Dict[str, Any]],
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Preserve hybrid ranking while keeping lexical fallback coverage."""
+        rows_by_id = {int(row["id"]): row for row in semantic_rows}
+        ordered_rows: List[Dict[str, Any]] = []
+        seen_ids = set()
+
+        for clip_id in ranked_ids:
+            row = rows_by_id.get(int(clip_id))
+            if row and clip_id not in seen_ids:
+                ordered_rows.append(row)
+                seen_ids.add(clip_id)
+                if len(ordered_rows) >= limit:
+                    return ordered_rows
+
+        for row in lexical_rows:
+            clip_id = int(row["id"])
+            if clip_id not in seen_ids:
+                ordered_rows.append(row)
+                seen_ids.add(clip_id)
+                if len(ordered_rows) >= limit:
+                    break
+
+        return ordered_rows
 
     def is_duplicate(self, content: str) -> bool:
         """Check if content already exists."""
@@ -483,6 +601,98 @@ class ClipboardStorage:
             return conn.execute("SELECT COUNT(*) FROM clips").fetchone()[0]
         except Exception:
             return 0
+
+    # ==================== NEURAL OPERATIONS ====================
+
+    def save_vector(self, clip_id: int, vector_bytes: bytes):
+        """Save neural vector for a clip."""
+        with _transaction() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO neural_vectors (clip_id, vector) VALUES (?, ?)",
+                (clip_id, vector_bytes),
+            )
+
+    def get_vector(self, clip_id: int) -> Optional[bytes]:
+        """Get neural vector for a clip."""
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT vector FROM neural_vectors WHERE clip_id = ?", (clip_id,)
+        ).fetchone()
+        return row["vector"] if row else None
+
+    def save_links(self, links_list: List[Tuple[int, int, float]]):
+        """Save neural links between clips."""
+        with _transaction() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO neural_links (source_id, target_id, weight) VALUES (?, ?, ?)",
+                links_list,
+            )
+
+    def get_links(self, clip_id_list: List[int]) -> List[Dict[str, Any]]:
+        """Get links where source or target is in the provided list."""
+        if not clip_id_list:
+            return []
+        conn = _get_connection()
+        placeholders = ",".join(["?"] * len(clip_id_list))
+        rows = conn.execute(
+            f"SELECT source_id, target_id, weight FROM neural_links WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
+            clip_id_list + clip_id_list,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_unindexed_clip_ids(self, limit: int = 100) -> List[int]:
+        """Get IDs of clips that haven't been indexed yet."""
+        conn = _get_connection()
+        rows = conn.execute(
+            """SELECT id FROM clips 
+               WHERE id NOT IN (SELECT clip_id FROM neural_vectors)
+               ORDER BY id DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [r["id"] for r in rows]
+
+    def get_all_clip_ids_with_vectors(self, limit: int = 500) -> List[int]:
+        """Get IDs of clips that have vectors."""
+        conn = _get_connection()
+        rows = conn.execute(
+            "SELECT clip_id FROM neural_vectors WHERE vector != '' ORDER BY clip_id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [r["clip_id"] for r in rows]
+
+    def get_neural_data(
+        self, clip_ids: List[int]
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Get nodes and links for a list of clip IDs."""
+        if not clip_ids:
+            return [], []
+
+        conn = _get_connection()
+        placeholders = ",".join(["?"] * len(clip_ids))
+
+        # Get nodes (content limited for graph)
+        rows = conn.execute(
+            f"SELECT id, type, content, is_pinned FROM clips WHERE id IN ({placeholders})",
+            clip_ids,
+        ).fetchall()
+        nodes = []
+        for r in rows:
+            content = r["content"]
+            if r["type"] == "text":
+                content = content[:50].replace("\n", " ")
+            nodes.append(
+                {
+                    "id": r["id"],
+                    "content": content,
+                    "type": "pinned" if r["is_pinned"] else "history",
+                }
+            )
+
+        # Get links
+        links = self.get_links(clip_ids)
+
+        return nodes, links
 
 
 # Global instance
