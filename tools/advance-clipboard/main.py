@@ -99,6 +99,7 @@ DEBUG_LOG_FILE = os.path.join(LOG_DIR, "Advance Clipboard.debug.log")
 FAULT_LOG_FILE = os.path.join(LOG_DIR, "Advance Clipboard.fault.log")
 
 UI_EDGE_MARGIN = 150  # Minimum distance from screen edges
+SW_RESTORE = 9
 
 # Ensure image directory exists
 if not os.path.exists(IMAGE_DIR):
@@ -1049,8 +1050,59 @@ class ClientApp(QWidget):
             return False
         target_hwnd = self.last_active_window_handle
         if target_hwnd:
+            self._restore_target_focus(target_hwnd)
             return user32.GetForegroundWindow() == target_hwnd
         return True
+
+    def _restore_target_focus(self, target_hwnd):
+        if sys.platform != "win32" or not target_hwnd:
+            return True
+        user32 = ctypes.windll.user32
+        try:
+            if hasattr(user32, "IsWindow") and not user32.IsWindow(target_hwnd):
+                logger.warning("restore_target_focus_invalid hwnd=%s", target_hwnd)
+                return False
+
+            current_foreground = user32.GetForegroundWindow()
+            if current_foreground == target_hwnd:
+                return True
+
+            if hasattr(user32, "IsIconic") and user32.IsIconic(target_hwnd):
+                user32.ShowWindow(target_hwnd, SW_RESTORE)
+
+            kernel32 = ctypes.windll.kernel32
+            current_thread = kernel32.GetCurrentThreadId()
+            target_thread = user32.GetWindowThreadProcessId(target_hwnd, None)
+            foreground_thread = (
+                user32.GetWindowThreadProcessId(current_foreground, None)
+                if current_foreground
+                else 0
+            )
+            attached = []
+
+            def attach(thread_id):
+                if thread_id and thread_id != current_thread:
+                    user32.AttachThreadInput(current_thread, thread_id, True)
+                    attached.append(thread_id)
+
+            attach(foreground_thread)
+            attach(target_thread)
+            try:
+                if hasattr(user32, "BringWindowToTop"):
+                    user32.BringWindowToTop(target_hwnd)
+                user32.SetForegroundWindow(target_hwnd)
+                if hasattr(user32, "SetFocus"):
+                    user32.SetFocus(target_hwnd)
+            finally:
+                for thread_id in reversed(attached):
+                    user32.AttachThreadInput(current_thread, thread_id, False)
+
+            return user32.GetForegroundWindow() == target_hwnd
+        except Exception as exc:
+            logger.warning(
+                "restore_target_focus_failed hwnd=%s error=%s", target_hwnd, exc
+            )
+            return False
 
     def _perform_keyboard_paste(self):
         logger.info(

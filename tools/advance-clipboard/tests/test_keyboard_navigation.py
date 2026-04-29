@@ -218,6 +218,64 @@ class _SpyClientApp(_TestClientApp):
         return super()._do_search()
 
 
+class _FakeUser32:
+    def __init__(self, foreground=100, target=200):
+        self.foreground = foreground
+        self.target = target
+        self.calls = []
+
+    def GetAsyncKeyState(self, key):
+        return 0
+
+    def IsWindow(self, hwnd):
+        self.calls.append(("IsWindow", hwnd))
+        return hwnd == self.target
+
+    def IsIconic(self, hwnd):
+        self.calls.append(("IsIconic", hwnd))
+        return False
+
+    def ShowWindow(self, hwnd, command):
+        self.calls.append(("ShowWindow", hwnd, command))
+        return True
+
+    def GetForegroundWindow(self):
+        self.calls.append(("GetForegroundWindow",))
+        return self.foreground
+
+    def GetWindowThreadProcessId(self, hwnd, process_id):
+        self.calls.append(("GetWindowThreadProcessId", hwnd))
+        return hwnd + 10
+
+    def AttachThreadInput(self, source_thread, target_thread, attach):
+        self.calls.append(("AttachThreadInput", source_thread, target_thread, attach))
+        return True
+
+    def BringWindowToTop(self, hwnd):
+        self.calls.append(("BringWindowToTop", hwnd))
+        return True
+
+    def SetForegroundWindow(self, hwnd):
+        self.calls.append(("SetForegroundWindow", hwnd))
+        self.foreground = hwnd
+        return True
+
+    def SetFocus(self, hwnd):
+        self.calls.append(("SetFocus", hwnd))
+        return hwnd
+
+
+class _FakeKernel32:
+    def GetCurrentThreadId(self):
+        return 999
+
+
+class _FakeWindll:
+    def __init__(self, user32):
+        self.user32 = user32
+        self.kernel32 = _FakeKernel32()
+
+
 class KeyboardNavigationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -466,6 +524,26 @@ class KeyboardNavigationTests(unittest.TestCase):
         self.assertLess(elapsed, 0.1)
         self.assertEqual(app.list_history.count(), 0)
         self.assertTrue(_wait_until(lambda: app.list_history.count() == 1))
+
+        app.backup_scheduler.cancel()
+        app.close()
+        QApplication.processEvents()
+
+    def test_ready_to_paste_restores_last_active_window_before_ctrl_v(self):
+        _get_qapp()
+        app = ClientApp(enable_monitor=False, init_data=False)
+        app.last_active_window_handle = 200
+        user32 = _FakeUser32(foreground=100, target=200)
+
+        with patch.object(sys, "platform", "win32"), patch(
+            "main.ctypes.windll", _FakeWindll(user32)
+        ):
+            self.assertTrue(app._ready_to_paste())
+
+        call_names = [c[0] for c in user32.calls]
+        self.assertIn("SetForegroundWindow", call_names)
+        self.assertIn("SetFocus", call_names)
+        self.assertEqual(user32.foreground, 200)
 
         app.backup_scheduler.cancel()
         app.close()
