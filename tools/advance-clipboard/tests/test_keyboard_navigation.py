@@ -1,10 +1,15 @@
 import os
 import sys
+import time
 import unittest
 from unittest.mock import MagicMock, patch
+
+# Add project root to path
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT_DIR)
+
 from PyQt6.QtCore import QEvent
 from PyQt6.QtGui import QKeyEvent
-
 
 # Ensure headless Qt (caller also sets this env var)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -62,11 +67,35 @@ class _StubSidecar:
     def move(self, *a):
         pass
 
+    def resize(self, *a):
+        pass
+
+    def setGeometry(self, *a):
+        pass
+
+    def setWindowTitle(self, *a):
+        pass
+
     def update_data(self, *a):
         pass
 
     def focus_node(self, *a):
         pass
+
+    def focus_query(self, *a):
+        pass
+
+    def reload_config(self, *a):
+        pass
+
+    def grab(self):
+        return MagicMock()
+
+    def isVisible(self):
+        return False
+
+    def isActiveWindow(self):
+        return False
 
 
 _neural_ui_mod.SidecarWindow = _StubSidecar
@@ -82,11 +111,8 @@ except Exception:  # pragma: no cover
     QSignalSpy = None
 
 
-# Make the sibling main.py importable regardless of cwd
-sys.path.insert(0, os.path.dirname(__file__))
-
-
-from main import ClientApp, SearchLineEdit
+from main import ClientApp
+from ui.widgets import SearchLineEdit
 
 
 _APP: QApplication | None = None
@@ -149,6 +175,9 @@ class _FakeStorage:
     def set_backup_callback(self, callback):
         return
 
+    def set_neural_event_callback(self, callback):
+        return
+
     def clear_backup_flag(self):
         self.need_backup = False
 
@@ -168,6 +197,15 @@ class _FakeStorage:
 
     def get_ungrouped_pinned(self, limit=50, offset=0):
         return list(self._pinned)[offset : offset + limit]
+
+    def trigger_daily_rebuild(self):
+        pass
+
+
+class _SlowFakeStorage(_FakeStorage):
+    def get_history(self, limit=20, offset=0):
+        time.sleep(0.25)
+        return super().get_history(limit, offset)
 
 
 class _SpyClientApp(_TestClientApp):
@@ -398,14 +436,36 @@ class KeyboardNavigationTests(unittest.TestCase):
         # Add new item to top of storage
         new_item = {"id": 99, "type": "text", "content": "newest"}
         app.storage._history.insert(0, new_item)
+        app.is_ui_dirty = True
 
         # Call show_at_cursor
         app.show_at_cursor()
+        self.assertTrue(_wait_until(lambda: app.list_history.currentRow() == 0))
 
         # Verify first item (the new one) is selected
         self.assertEqual(app.list_history.currentRow(), 0)
         cur_data = app.list_history.currentItem().data(Qt.ItemDataRole.UserRole)
         self.assertEqual(cur_data["id"], 99)
+
+        app.backup_scheduler.cancel()
+        app.close()
+        QApplication.processEvents()
+
+    def test_show_at_cursor_returns_before_dirty_refresh_finishes(self):
+        _get_qapp()
+        app = _TestClientApp()
+        app.storage = _SlowFakeStorage(
+            history=[{"id": 1, "type": "text", "content": "delayed"}]
+        )
+        app.is_ui_dirty = True
+
+        start = time.monotonic()
+        app.show_at_cursor()
+        elapsed = time.monotonic() - start
+
+        self.assertLess(elapsed, 0.1)
+        self.assertEqual(app.list_history.count(), 0)
+        self.assertTrue(_wait_until(lambda: app.list_history.count() == 1))
 
         app.backup_scheduler.cancel()
         app.close()

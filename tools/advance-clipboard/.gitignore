@@ -2,9 +2,9 @@
 *.db
 *.db-wal
 *.db-shm
-
-# Generated application files
-clipboard.db          # SQLite database created at runtime
+storage/*.db
+storage/*.db-wal
+storage/*.db-shm
 
 # Backup files
 backups/
@@ -13,7 +13,7 @@ backups/
 # Legacy data file
 data.json
 
-# Image storage
+# Image storage (runtime clipboard images)
 images/
 
 # Python
@@ -45,3 +45,11 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Neural runtime artifacts
+.rag_last_rebuild
+neural/graph/test_data.json
+neural/graph/test_preview.html
+
+# Design docs (internal only)
+docs/superpowers/
