@@ -13,3 +13,6 @@ wheels/
 logs/
 *.log
 *.zip
+
+# Local plugin applications
+/tools/
