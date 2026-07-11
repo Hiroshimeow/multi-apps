@@ -28,7 +28,10 @@ class AppController:
         return app.get("path") if app else None
 
     def get_app_status(self, app_name):
-        return self.session_manager.get_info(app_name)
+        app = self.config_manager.get_app(app_name)
+        if not app:
+            return {"status": "STOPPED"}
+        return self.session_manager.get_info(self._session_key(app))
 
     def start_app(self, app_name):
         app = self.config_manager.get_app(app_name)
@@ -50,7 +53,11 @@ class AppController:
         return False
 
     def stop_app(self, app_name):
-        success, message = self.session_manager.stop(app_name)
+        app = self.config_manager.get_app(app_name)
+        if not app:
+            print_warning(f"Could not stop '{app_name}': app not found.")
+            return False
+        success, message = self.session_manager.stop(self._session_key(app))
         if success:
             print_success(f"Stopped '{app_name}': {message}")
         else:
@@ -64,3 +71,8 @@ class AppController:
     def stop_all(self):
         for app in self.config_manager.get_apps(enabled_only=True):
             self.stop_app(app["name"])
+
+    def _session_key(self, app):
+        if isinstance(self.session_manager, SubprocessSessionManager):
+            return app["id"]
+        return app["name"]

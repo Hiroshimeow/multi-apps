@@ -100,7 +100,51 @@ class SubprocessSessionTests(unittest.TestCase):
 
             self.assertTrue(marker.exists())
             self.assertEqual(marker.read_text(encoding="utf-8"), "ok")
-            session.get_info("Smoke")
+
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if session.get_info("Smoke")["status"] == "STOPPED":
+                    break
+                time.sleep(0.05)
+            self.assertEqual(session.get_info("Smoke")["status"], "STOPPED")
+
+    def test_repeated_natural_exits_remain_stopped_without_registry_warnings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            executable = (
+                subprocess.list2cmdline([sys.executable])
+                if os.name == "nt"
+                else shlex.quote(sys.executable)
+            )
+            app = {
+                "id": "natural-exit",
+                "name": "Natural Exit",
+                "path": str(root),
+                "command": f'{executable} -c "pass"',
+                "args": [],
+                "multi_run": False,
+            }
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+
+            with patch("lib.runtime.registry.print_warning") as warning:
+                for _ in range(5):
+                    success, message = session.start(CommandRunner(app, {}))
+                    self.assertTrue(success, message)
+                    deadline = time.monotonic() + 8.0
+                    while time.monotonic() < deadline:
+                        if session.get_info("natural-exit")["status"] == "STOPPED":
+                            break
+                        time.sleep(0.02)
+                    self.assertEqual(
+                        session.get_info("natural-exit")["status"], "STOPPED"
+                    )
+
+            records = session.registry.list_records()
+            self.assertEqual(len(records), 5)
+            self.assertTrue(all(record.state == "stopped" for record in records))
+            warning.assert_not_called()
 
 
 if __name__ == "__main__":
