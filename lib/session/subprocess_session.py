@@ -13,6 +13,7 @@ from ..runtime.process_identity import process_matches
 from ..runtime.registry import RuntimeRegistry
 
 ACTIVE_STATES = frozenset({"starting", "running", "stopping"})
+STARTING_IPC_GRACE_SECONDS = 10.0
 STARTING_STOP_RETRY_TIMEOUT = 3.0
 STOP_IPC_RETRY_INTERVAL = 0.05
 
@@ -284,6 +285,7 @@ class SubprocessSessionManager(BaseSessionManager):
                 if time.monotonic() < deadline:
                     time.sleep(STOP_IPC_RETRY_INTERVAL)
                     continue
+                self._transition_after_uncontrollable_stop(current)
                 return None, (
                     "verified keeper did not expose Stop IPC before the retry timeout: "
                     f"{last_error}"
@@ -293,6 +295,23 @@ class SubprocessSessionManager(BaseSessionManager):
                 latest = self.registry.load(current.run_id) or current
                 return latest, None
             return None, response.get("message", "stop rejected")
+
+    def _transition_after_uncontrollable_stop(self, record):
+        latest = record
+        for _ in range(3):
+            latest = self.registry.load(record.run_id) or latest
+            keeper_alive, root_alive = self._record_processes_alive(latest)
+            target_state = "orphaned" if keeper_alive or root_alive else "stopped"
+            if latest.state in {"stopped", "failed"}:
+                return latest
+            updated = self.registry.update(
+                latest.run_id,
+                expected_updated_at=latest.updated_at,
+                state=target_state,
+            )
+            if updated is None or updated.state == target_state:
+                return updated
+        return latest
 
     def is_running(self, app_name):
         return bool(self._active_records(app_name))
@@ -377,7 +396,7 @@ class SubprocessSessionManager(BaseSessionManager):
         try:
             response = self.client.status(record.run_id, timeout=0.5)
         except (ConnectionError, TimeoutError):
-            if record.state == "starting":
+            if record.state == "starting" and self._starting_within_ipc_grace(record):
                 return record
             return self._update_if_changed(record, state="orphaned")
 
@@ -437,7 +456,10 @@ class SubprocessSessionManager(BaseSessionManager):
                 continue
             keeper_alive, root_alive = self._record_processes_alive(record)
             if keeper_alive:
-                refreshed.append(record)
+                if record.state == "starting" and not self._starting_within_ipc_grace(record):
+                    refreshed.append(self._update_if_changed(record, state="orphaned"))
+                else:
+                    refreshed.append(record)
                 continue
             target_state = "orphaned" if root_alive else "stopped"
             refreshed.append(self._update_if_changed(record, state=target_state))
@@ -466,6 +488,22 @@ class SubprocessSessionManager(BaseSessionManager):
             log_dir = config_dir / log_dir
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir.resolve()
+
+    def _starting_within_ipc_grace(self, record):
+        return self._record_age_seconds(record) <= STARTING_IPC_GRACE_SECONDS
+
+    @staticmethod
+    def _record_age_seconds(record):
+        try:
+            created_at = datetime.fromisoformat(record.created_at)
+        except (TypeError, ValueError):
+            return float("inf")
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        return max(
+            0.0,
+            (datetime.now(timezone.utc) - created_at).total_seconds(),
+        )
 
     @staticmethod
     def _parse_timestamp(value):

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -461,6 +462,156 @@ class SubprocessSessionTests(unittest.TestCase):
             self.assertEqual(
                 session.registry.load(record.run_id).state,
                 "starting",
+            )
+            session.registry.delete(record.run_id)
+
+    def test_stale_starting_becomes_orphaned_on_reconcile_and_get_info(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            current_created_at = get_process_created_at(os.getpid())
+            self.assertIsNotNone(current_created_at)
+            record = RunRecord.create(
+                app_id="stale-starting",
+                path=str(root),
+                command="unused",
+                run_id="stale-starting-run",
+            )
+            record.keeper_pid = os.getpid()
+            record.keeper_created_at = current_created_at
+            record.state = "starting"
+            record.created_at = (
+                datetime.now(timezone.utc) - timedelta(hours=2)
+            ).isoformat()
+            session.registry.save(record)
+
+            with patch.object(
+                session.client,
+                "status",
+                side_effect=ConnectionError("IPC permanently absent"),
+            ):
+                reconciled = session.reconcile("stale-starting")[0]
+
+            self.assertEqual(reconciled.state, "orphaned")
+            self.assertEqual(
+                session.get_info("stale-starting")["status"],
+                "ORPHANED",
+            )
+            self.assertEqual(
+                session.registry.load(record.run_id).state,
+                "orphaned",
+            )
+            session.registry.delete(record.run_id)
+
+            info_record = RunRecord.create(
+                app_id="stale-starting-info",
+                path=str(root),
+                command="unused",
+                run_id="stale-starting-info-run",
+            )
+            info_record.keeper_pid = os.getpid()
+            info_record.keeper_created_at = current_created_at
+            info_record.state = "starting"
+            info_record.created_at = (
+                datetime.now(timezone.utc) - timedelta(hours=2)
+            ).isoformat()
+            session.registry.save(info_record)
+
+            with patch.object(
+                session.client,
+                "status",
+                side_effect=AssertionError("get_info must not poll IPC"),
+            ):
+                info = session.get_info("stale-starting-info")
+
+            self.assertEqual(info["status"], "ORPHANED")
+            self.assertEqual(
+                session.registry.load(info_record.run_id).state,
+                "orphaned",
+            )
+            session.registry.delete(info_record.run_id)
+
+    def test_exhausted_starting_stop_retry_becomes_orphaned(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            current_created_at = get_process_created_at(os.getpid())
+            self.assertIsNotNone(current_created_at)
+            record = RunRecord.create(
+                app_id="stuck-starting",
+                path=str(root),
+                command="unused",
+                run_id="stuck-starting-run",
+            )
+            record.keeper_pid = os.getpid()
+            record.keeper_created_at = current_created_at
+            record.state = "starting"
+            session.registry.save(record)
+
+            with patch.object(
+                session.client,
+                "status",
+                side_effect=ConnectionError("listener not ready"),
+            ), patch.object(
+                session.client,
+                "stop",
+                side_effect=ConnectionError("IPC permanently absent"),
+            ), patch(
+                "lib.session.subprocess_session.STARTING_STOP_RETRY_TIMEOUT",
+                0.05,
+            ):
+                success, message = session.stop("stuck-starting")
+
+            self.assertFalse(success, message)
+            self.assertIn("retry timeout", message)
+            self.assertEqual(
+                session.registry.load(record.run_id).state,
+                "orphaned",
+            )
+            session.registry.delete(record.run_id)
+
+    def test_orphaned_stale_starting_blocks_duplicate_non_multi_start(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            current_created_at = get_process_created_at(os.getpid())
+            self.assertIsNotNone(current_created_at)
+            record = RunRecord.create(
+                app_id="blocked-start",
+                path=str(root),
+                command="unused",
+                run_id="blocked-start-run",
+            )
+            record.keeper_pid = os.getpid()
+            record.keeper_created_at = current_created_at
+            record.state = "starting"
+            record.created_at = (
+                datetime.now(timezone.utc) - timedelta(hours=2)
+            ).isoformat()
+            session.registry.save(record)
+            app = {
+                "id": "blocked-start",
+                "name": "Blocked Start",
+                "path": str(root),
+                "command": "unused",
+                "args": [],
+                "multi_run": False,
+            }
+
+            success, message = session.start(CommandRunner(app, {}))
+
+            self.assertFalse(success, message)
+            self.assertIn("orphaned run whose identity is uncertain", message)
+            self.assertEqual(len(session.registry.list_records()), 1)
+            self.assertEqual(
+                session.registry.load(record.run_id).state,
+                "orphaned",
             )
             session.registry.delete(record.run_id)
 
