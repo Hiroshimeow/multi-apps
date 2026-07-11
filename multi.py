@@ -17,12 +17,14 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QHBoxLayout,
+    QMessageBox,
 )
 from PyQt6.QtGui import QIcon, QAction, QFont, QGuiApplication
 from PyQt6.QtCore import QTimer, pyqtSignal, Qt, QPoint
 
 # Import from modular library
 from lib.core import AppController
+from lib.runtime.single_instance import SingleInstanceLock
 from lib.utils import is_windows, is_linux
 
 # ==========================================
@@ -514,6 +516,17 @@ def main():
         False
     )  # Important: Do not exit when window is closed (since we have no window)
 
+    runtime_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".runtime")
+    instance_lock = SingleInstanceLock(os.path.join(runtime_dir, "launcher.lock"))
+    if not instance_lock.acquire():
+        QMessageBox.information(
+            None,
+            "Launcher already running",
+            "Another launcher instance is already active.",
+        )
+        return 1
+    app._single_instance_lock = instance_lock
+
     # Create icon
     if os.path.exists("icon.png"):
         icon = QIcon("icon.png")
@@ -532,8 +545,10 @@ def main():
         2000,
     )
 
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    instance_lock.release()
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
