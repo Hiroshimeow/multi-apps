@@ -30,7 +30,7 @@ apps:
 
   - name: "Advance Clipboard"
     path: "E:/python_project/multi-run-apps/tools/advance-clipboard/"
-    command: ".venv/Scripts/python.exe main.py"
+    command: "uv run main.py"
     enabled: true
     auto_start: true
     multi_run: false
