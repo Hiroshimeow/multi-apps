@@ -71,7 +71,8 @@ apps:
 
   - name: "External project"
     type: "uv"
-    command: "uv run --directory E:/projects/example main.py"
+    path: "E:/projects/example/main.py"
+    workdir: "E:/projects/example"
     enabled: true
 
   - name: "Custom command"

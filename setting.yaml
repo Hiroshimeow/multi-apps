@@ -21,7 +21,8 @@ global:
 apps:
   - name: "Screens-trans-chatbot"
     type: "uv"
-    command: "uv run --directory E:/python_project/Screens-Trans-Chatbot main.py"
+    path: "E:/python_project/Screens-Trans-Chatbot/main.py"
+    workdir: "E:/python_project/Screens-Trans-Chatbot"
     enabled: true
     os: win11
     auto_start: false
