@@ -30,8 +30,19 @@ class AppController:
     def get_app_status(self, app_name):
         app = self.config_manager.get_app(app_name)
         if not app:
-            return {"status": "STOPPED"}
+            return {"status": "STOPPED", "instances": 0}
         return self.session_manager.get_info(self._session_key(app))
+
+    def reconcile(self):
+        reconcile = getattr(self.session_manager, "reconcile", None)
+        if callable(reconcile):
+            reconcile()
+
+    def should_auto_start(self, app_name):
+        app = self.config_manager.get_app(app_name)
+        if not app or not app.get("enabled", True) or not app.get("auto_start", False):
+            return False
+        return self.get_app_status(app_name).get("status") == "STOPPED"
 
     def start_app(self, app_name, *, wait_for_ready=True):
         app = self.config_manager.get_app(app_name)

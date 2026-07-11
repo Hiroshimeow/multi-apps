@@ -321,46 +321,49 @@ class SubprocessSessionManager(BaseSessionManager):
         self.client.reap_finished()
         app_records = self._refresh_dead_active_records(app_name)
         records = [record for record in app_records if record.state in ACTIVE_STATES]
-        if not records:
-            orphaned = [record for record in app_records if record.state == "orphaned"]
-            if orphaned:
-                newest = max(orphaned, key=lambda item: item.created_at)
-                return {
-                    "status": "ORPHANED",
-                    "instances": len(orphaned),
-                    "run_id": newest.run_id,
-                    "keeper_pid": newest.keeper_pid,
-                    "pid": newest.root_pid,
-                    "stdout_path": newest.stdout_path,
-                    "stderr_path": newest.stderr_path,
-                }
-            return {"status": "STOPPED"}
+        if records:
+            newest = max(records, key=lambda item: item.created_at)
+            status = {
+                "starting": "STARTING",
+                "running": "RUNNING",
+                "stopping": "STOPPING",
+            }.get(newest.state, newest.state.upper())
+            return self._run_info_payload(newest, status, len(records))
 
-        newest = max(records, key=lambda item: item.created_at)
-        created_at = self._parse_timestamp(newest.created_at)
+        orphaned = [record for record in app_records if record.state == "orphaned"]
+        if orphaned:
+            newest = max(orphaned, key=lambda item: item.created_at)
+            return self._run_info_payload(newest, "ORPHANED", len(orphaned))
+
+        if app_records:
+            newest = max(app_records, key=lambda item: item.created_at)
+            return self._run_info_payload(newest, "STOPPED", 0)
+        return {"status": "STOPPED", "instances": 0}
+
+    def _run_info_payload(self, record, status, instances):
+        created_at = self._parse_timestamp(record.created_at)
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
         uptime = datetime.now(timezone.utc) - created_at
         total_seconds = max(0, int(uptime.total_seconds()))
         days, remainder = divmod(total_seconds, 86400)
         hours, remainder = divmod(remainder, 3600)
         minutes, seconds = divmod(remainder, 60)
-        status = {
-            "starting": "STARTING",
-            "running": "RUNNING",
-            "stopping": "STOPPING",
-        }.get(newest.state, newest.state.upper())
         return {
             "status": status,
-            "pid": newest.root_pid,
-            "root_created_at": newest.root_created_at,
-            "keeper_pid": newest.keeper_pid,
-            "keeper_created_at": newest.keeper_created_at,
-            "run_id": newest.run_id,
-            "instances": len(records),
+            "state": record.state,
+            "pid": record.root_pid,
+            "root_created_at": record.root_created_at,
+            "keeper_pid": record.keeper_pid,
+            "keeper_created_at": record.keeper_created_at,
+            "run_id": record.run_id,
+            "instances": instances,
             "uptime": f"{days}d {hours}h {minutes}m {seconds}s",
             "start_time": created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
-            "created_at": newest.created_at,
-            "stdout_path": newest.stdout_path,
-            "stderr_path": newest.stderr_path,
+            "created_at": record.created_at,
+            "stdout_path": record.stdout_path,
+            "stderr_path": record.stderr_path,
+            "exit_code": record.exit_code,
         }
 
     def list_runs(self, app_name=None):

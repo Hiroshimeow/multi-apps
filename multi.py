@@ -52,60 +52,64 @@ class AppManager:
         """Stop the app via controller."""
         self.controller.stop_app(self.name)
 
-    def view_logs(self):
-        """Open the logs directory for this app (legacy use).
+    def get_status_info(self):
+        """Return the registry-backed status snapshot for this app."""
+        return self.controller.get_app_status(self.name)
 
-        This is now only used as a fallback when specific log files
-        cannot be located.  The new UI exposes separate buttons for
-        output and error logs.
-        """
+    def view_logs(self):
+        """Open the directory containing the newest relevant run logs."""
+        for stream in ("out", "err"):
+            path = self.get_log_path(stream)
+            if path:
+                log_dir = os.path.dirname(path)
+                if os.path.isdir(log_dir):
+                    self._open_path(log_dir)
+                    return
+
         log_dir = self.controller.config_manager.get_log_dir() or os.path.join(
             os.getcwd(), "logs"
         )
-        if os.path.exists(log_dir):
-            if is_windows():
-                os.startfile(log_dir)
-            else:
-                subprocess.Popen(["xdg-open", log_dir])
+        if os.path.isdir(log_dir):
+            self._open_path(log_dir)
 
     def view_output_log(self):
-        """Open the application's stdout log file if present."""
-        log_dir = self.controller.config_manager.get_log_dir() or os.path.join(
-            os.getcwd(), "logs"
-        )
-        out_path = os.path.join(log_dir, f"{self.name}.out.log")
-        if os.path.exists(out_path):
-            if is_windows():
-                os.startfile(out_path)
-            else:
-                subprocess.Popen(["xdg-open", out_path])
-        else:
-            # fallback to folder so user can inspect
-            self.view_logs()
+        """Open the newest relevant run's stdout log file."""
+        self._view_log("out")
 
     def view_error_log(self):
-        """Open the application's stderr log file if present."""
-        log_dir = self.controller.config_manager.get_log_dir() or os.path.join(
-            os.getcwd(), "logs"
-        )
-        err_path = os.path.join(log_dir, f"{self.name}.err.log")
-        if os.path.exists(err_path):
-            if is_windows():
-                os.startfile(err_path)
-            else:
-                subprocess.Popen(["xdg-open", err_path])
+        """Open the newest relevant run's stderr log file."""
+        self._view_log("err")
+
+    def _view_log(self, stream):
+        path = self.get_log_path(stream)
+        if path and os.path.exists(path):
+            self._open_path(path)
         else:
             self.view_logs()
 
-    def get_status_text(self):
-        """Get status text formatted for UI."""
-        status_info = self.controller.get_app_status(self.name)
+    @staticmethod
+    def _open_path(path):
+        if is_windows():
+            os.startfile(path)
+        else:
+            subprocess.Popen(["xdg-open", path])
+
+    def get_status_text(self, status_info=None):
+        """Format all persisted runtime states for the tray UI."""
+        status_info = status_info or self.get_status_info()
         status = status_info.get("status", "STOPPED")
+        instances = int(status_info.get("instances") or 0)
 
         if status == "RUNNING":
-            uptime = status_info.get("uptime", "unknown")
-            return f"Running ({uptime})"
-
+            if instances > 1:
+                return f"Running ({instances} instances)"
+            return f"Running ({status_info.get('uptime', 'unknown')})"
+        if status == "STARTING":
+            return "Starting" if instances <= 1 else f"Starting ({instances} instances)"
+        if status == "STOPPING":
+            return "Stopping" if instances <= 1 else f"Stopping ({instances} instances)"
+        if status == "ORPHANED":
+            return "Orphaned" if instances <= 1 else f"Orphaned ({instances} instances)"
         return "Stopped"
 
     def get_workdir(self):
@@ -113,7 +117,13 @@ class AppManager:
         return self.controller.get_app_workdir(self.name)
 
     def get_log_path(self, stream):
-        """Return the stdout/stderr log path for this app."""
+        """Return the newest active, otherwise newest historical, run log path."""
+        status_info = self.get_status_info()
+        key = "stdout_path" if stream == "out" else "stderr_path"
+        path = status_info.get(key)
+        if path:
+            return os.path.abspath(path)
+
         log_dir = self.controller.config_manager.get_log_dir() or os.path.join(
             os.getcwd(), "logs"
         )
@@ -268,7 +278,7 @@ class AppControlWidget(QWidget):
 
         # Status
         self.lbl_status = QLabel(manager.get_status_text())
-        self.lbl_status.setFixedWidth(120)
+        self.lbl_status.setFixedWidth(170)
         self.lbl_status.setStyleSheet("color: gray;")
 
         # Start Button (+)
@@ -325,21 +335,23 @@ class AppControlWidget(QWidget):
         self.update_ui()
 
     def update_ui(self):
-        status = self.manager.get_status_text()
-        self.lbl_status.setText(status)
-        is_running = "Running" in status
-        
-        if is_running:
-            self.lbl_status.setStyleSheet("color: green;")
-            self.btn_stop.setEnabled(True)
-            
-            # Disable start if multi_run is false
-            multi_run = self.manager.app_config.get("multi_run", False)
-            self.btn_start.setEnabled(multi_run)
-        else:
-            self.lbl_status.setStyleSheet("color: red;")
-            self.btn_stop.setEnabled(False)
-            self.btn_start.setEnabled(True)
+        status_info = self.manager.get_status_info()
+        status = status_info.get("status", "STOPPED")
+        self.lbl_status.setText(self.manager.get_status_text(status_info))
+
+        color = {
+            "STARTING": "#c58b00",
+            "RUNNING": "green",
+            "STOPPING": "#c58b00",
+            "ORPHANED": "#b00020",
+            "STOPPED": "gray",
+        }.get(status, "gray")
+        self.lbl_status.setStyleSheet(f"color: {color};")
+
+        multi_run = self.manager.app_config.get("multi_run", False)
+        controllable = status in {"STARTING", "RUNNING", "STOPPING"}
+        self.btn_stop.setEnabled(controllable)
+        self.btn_start.setEnabled(status == "STOPPED" or multi_run)
 
     def on_start(self):
         success, msg = self.manager.launch()
@@ -367,10 +379,12 @@ class AppControlWidget(QWidget):
 
 
 class SystemTrayApp(QSystemTrayIcon):
-    def __init__(self, icon, parent=None):
+    def __init__(self, icon, parent=None, instance_lock=None):
         super().__init__(icon, parent)
         self.managers = []
         self.controller = None
+        self.instance_lock = instance_lock
+        self._restart_requested = False
         self.load_config()
 
         # Setup Menu
@@ -381,14 +395,17 @@ class SystemTrayApp(QSystemTrayIcon):
         # Click handler (Left click -> Toast)
         self.activated.connect(self.on_tray_activated)
 
-        # Auto-start configured apps
-        QTimer.singleShot(1000, self.auto_start_apps)
+        # Auto-start only after controller/session reconciliation and menu recovery.
+        self.auto_start_timer = QTimer(self)
+        self.auto_start_timer.setSingleShot(True)
+        self.auto_start_timer.timeout.connect(self.auto_start_apps)
+        self.auto_start_timer.start(1000)
 
     def auto_start_apps(self):
         print("Auto-starting apps with auto_start=true...")
+        self.controller.reconcile()
         for mgr in self.managers:
-            # Check if app has auto_start: true in its config
-            if mgr.app_config.get('auto_start', False):
+            if self.controller.should_auto_start(mgr.name):
                 print(f"  -> Starting: {mgr.name}")
                 mgr.launch()
 
@@ -458,11 +475,15 @@ class SystemTrayApp(QSystemTrayIcon):
         refresh_action.triggered.connect(self.refresh_all)
         self.menu.addAction(refresh_action)
 
-        restart_action = QAction("Restart Launcher", self.menu)
-        restart_action.triggered.connect(self.restart_app)
-        self.menu.addAction(restart_action)
+        stop_all_action = QAction("Stop All Apps", self.menu)
+        stop_all_action.triggered.connect(self.stop_all_apps)
+        self.menu.addAction(stop_all_action)
 
-        exit_action = QAction("Exit Launcher (Kill All)", self.menu)
+        self.restart_action = QAction("Restart Launcher", self.menu)
+        self.restart_action.triggered.connect(self.restart_app)
+        self.menu.addAction(self.restart_action)
+
+        exit_action = QAction("Exit Launcher", self.menu)
         exit_action.triggered.connect(self.exit_app)
         self.menu.addAction(exit_action)
 
@@ -478,15 +499,18 @@ class SystemTrayApp(QSystemTrayIcon):
             self.show_toast()
 
     def show_toast(self):
-        # Build message
+        # Build message from recovered registry status, not launcher-local memory.
         active_apps = []
         for mgr in self.managers:
-            status = mgr.get_status_text()
-            if "Running" in status:
-                active_apps.append(f"• {mgr.name}: {status}")
+            status_info = mgr.get_status_info()
+            status = status_info.get("status", "STOPPED")
+            if status != "STOPPED":
+                active_apps.append(
+                    f"• {mgr.name}: {mgr.get_status_text(status_info)}"
+                )
 
         if active_apps:
-            title = f"{len(active_apps)} Apps Running"
+            title = f"{len(active_apps)} Apps Active"
             msg = "\n".join(active_apps)
         else:
             title = "Launcher Idle"
@@ -494,19 +518,70 @@ class SystemTrayApp(QSystemTrayIcon):
 
         self.showMessage(title, msg, QSystemTrayIcon.MessageIcon.Information, 3000)
 
-    def restart_app(self):
-        # Kill all apps before restart
+    def stop_all_apps(self):
         if self.controller:
             self.controller.stop_all()
-        
-        # Restart current process
+
+    def _stop_launcher_ui_activity(self):
+        if hasattr(self, "auto_start_timer"):
+            self.auto_start_timer.stop()
+        if hasattr(self, "menu"):
+            for timer in self.menu.findChildren(QTimer):
+                timer.stop()
+
+    def _spawn_replacement_launcher(self):
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        kwargs = {
+            "cwd": project_root,
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if is_windows():
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        else:
+            kwargs["start_new_session"] = True
+        return subprocess.Popen([sys.executable] + sys.argv, **kwargs)
+
+    def restart_app(self):
+        if self._restart_requested:
+            return
+        self._restart_requested = True
+        self.restart_action.setEnabled(False)
+        self._stop_launcher_ui_activity()
+
+        released_lock = bool(self.instance_lock and self.instance_lock.acquired)
+        if released_lock:
+            self.instance_lock.release()
+
+        try:
+            self._spawn_replacement_launcher()
+        except Exception as exc:
+            lock_restored = not released_lock or self.instance_lock.acquire()
+            if not lock_restored:
+                self.showMessage(
+                    "Restart failed",
+                    f"Could not restore launcher lock: {exc}",
+                    QSystemTrayIcon.MessageIcon.Critical,
+                    5000,
+                )
+                QApplication.quit()
+                return
+            self._restart_requested = False
+            self.restart_action.setEnabled(True)
+            self.auto_start_timer.start(1000)
+            self.showMessage(
+                "Restart failed",
+                str(exc),
+                QSystemTrayIcon.MessageIcon.Critical,
+                5000,
+            )
+            return
+
         QApplication.quit()
-        subprocess.Popen([sys.executable] + sys.argv)
 
     def exit_app(self):
-        # Kill all apps before exit
-        if self.controller:
-            self.controller.stop_all()
+        self._stop_launcher_ui_activity()
         QApplication.quit()
 
 
@@ -534,7 +609,7 @@ def main():
         # Fallback system icon
         icon = app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon)
 
-    tray = SystemTrayApp(icon)
+    tray = SystemTrayApp(icon, instance_lock=instance_lock)
     tray.show()
 
     # Start Toast
@@ -545,9 +620,10 @@ def main():
         2000,
     )
 
-    exit_code = app.exec()
-    instance_lock.release()
-    return exit_code
+    try:
+        return app.exec()
+    finally:
+        instance_lock.release()
 
 
 if __name__ == "__main__":
