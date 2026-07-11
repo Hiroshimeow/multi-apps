@@ -21,7 +21,7 @@ global:
 apps:
   - name: "Screens-trans-chatbot"
     type: "uv"
-    command: "cd E:/python_project/Screens-Trans-Chatbot && uv run main.py"
+    command: "uv run --directory E:/python_project/Screens-Trans-Chatbot main.py"
     enabled: true
     os: win11
     auto_start: false
@@ -46,44 +46,85 @@ apps:
   - name: "Advance Clipboard"
     type: "python"
     path: "E:/python_project/multi-run-apps/tools/advance-clipboard/main.py"
+    env:
+      type: "venv"
+      path: "E:/python_project/multi-run-apps/tools/advance-clipboard/.venv"
     enabled: true
     auto_start: true
     multi_run: false
     os: win11
 
-  - name: "openclaw gateway"
-    type: "command"
-    command: "C:/Users/admin/AppData/Roaming/npm/openclaw.cmd gateway"
-    env_vars:
-      PATH: "C:/Program Files/nodejs;${PATH}"
+  - name: "Tampermonkey Auto Server"
+    type: "uv"
+    path: "E:/python_project/tampermonkey_auto/server.py"
     enabled: true
+    auto_start: true
     multi_run: false
-    auto_start: false
     os: win11
 
-  - name: "openclaw-repo gateway"
-    type: "cmd"
-    command: "cd E:/git-project/openclaw; pnpm openclaw --profile repo gateway --port 18791 --verbose"
+  - name: "Personal MCP Launcher"
+    type: "uv"
+    path: "C:/Users/admin/personal-mcp-launcher/main.py"
+    args:
+      - "--repo"
+      - "E:/python_project"
     enabled: true
+    auto_start: true
     multi_run: false
-    auto_start: false
     os: win11
 
-  - name: "nanobot gateway"
+  - name: "MCP ThinkBook Tunnel"
     type: "command"
-    command: "C:/Users/admin/miniconda3/Scripts/nanobot.exe gateway"
+    command: "hport 8101 -s mcp-thinkbook -y"
     enabled: true
+    auto_start: true
     multi_run: false
-    auto_start: false
     os: win11
 
-  - name: "zeroclaw gateway"
-    type: "command"
-    command: "C:/Users/admin/.cargo/bin/zeroclaw.exe gateway"
+  - name: "LAN Drive"
+    type: "uv"
+    path: "E:/python_project/lan-drive/lan_drive.py"
+    args:
+      - "--root"
+      - "E:/"
     enabled: true
+    auto_start: true
     multi_run: false
-    auto_start: false
     os: win11
+
+  # - name: "openclaw gateway"
+  #   type: "command"
+  #   command: "C:/Users/admin/AppData/Roaming/npm/openclaw.cmd gateway"
+  #   env_vars:
+  #     PATH: "C:/Program Files/nodejs;${PATH}"
+  #   enabled: true
+  #   multi_run: false
+  #   auto_start: false
+  #   os: win11
+
+  # - name: "openclaw-repo gateway"
+  #   type: "cmd"
+  #   command: "cd E:/git-project/openclaw; pnpm openclaw --profile repo gateway --port 18791 --verbose"
+  #   enabled: true
+  #   multi_run: false
+  #   auto_start: false
+  #   os: win11
+
+  # - name: "nanobot gateway"
+  #   type: "command"
+  #   command: "C:/Users/admin/miniconda3/Scripts/nanobot.exe gateway"
+  #   enabled: true
+  #   multi_run: false
+  #   auto_start: false
+  #   os: win11
+
+  # - name: "zeroclaw gateway"
+  #   type: "command"
+  #   command: "C:/Users/admin/.cargo/bin/zeroclaw.exe gateway"
+  #   enabled: true
+  #   multi_run: false
+  #   auto_start: false
+  #   os: win11
 
   - name: "PDF 2 PNG Converter"
     type: "python"

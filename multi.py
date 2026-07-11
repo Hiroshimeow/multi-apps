@@ -18,8 +18,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QHBoxLayout,
 )
-from PyQt6.QtGui import QIcon, QAction
-from PyQt6.QtCore import QTimer, pyqtSignal
+from PyQt6.QtGui import QIcon, QAction, QFont, QGuiApplication
+from PyQt6.QtCore import QTimer, pyqtSignal, Qt, QPoint
 
 # Import from modular library
 from lib.core import AppController
@@ -106,6 +106,52 @@ class AppManager:
 
         return "Stopped"
 
+    def get_workdir(self):
+        """Return the directory opened when the app name is clicked."""
+        return self.controller.get_app_workdir(self.name)
+
+    def get_log_path(self, stream):
+        """Return the stdout/stderr log path for this app."""
+        log_dir = self.controller.config_manager.get_log_dir() or os.path.join(
+            os.getcwd(), "logs"
+        )
+        suffix = "out" if stream == "out" else "err"
+        return os.path.join(log_dir, f"{self.name}.{suffix}.log")
+
+    def read_log_tail(self, stream, max_lines=7, max_bytes=65536, max_line_chars=220):
+        """Read a small tail of one log without loading the full file."""
+        path = self.get_log_path(stream)
+        label = "output" if stream == "out" else "error"
+        if not os.path.exists(path):
+            return f"[{label} log does not exist]"
+
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                read_size = min(size, max_bytes)
+                handle.seek(-read_size, os.SEEK_END)
+                raw = handle.read(read_size)
+        except OSError as exc:
+            return f"[cannot read {label} log: {exc}]"
+
+        text = raw.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+
+        # The first line can be partial when reading only the end of a large file.
+        if size > read_size and lines:
+            lines = lines[1:]
+        if not lines:
+            return f"[{label} log is empty]"
+
+        tail = []
+        for line in lines[-max_lines:]:
+            line = line.replace("	", "    ")
+            if len(line) > max_line_chars:
+                line = line[: max_line_chars - 3] + "..."
+            tail.append(line)
+        return "\n".join(tail)
+
 
 # ==========================================
 # 2. GUI COMPONENTS (PyQt6)
@@ -121,6 +167,79 @@ class ClickableLabel(QLabel):
         self.clicked.emit()
         super().mousePressEvent(event)
 
+
+class HoverLogButton(QPushButton):
+    """A log button that reports pointer enter/leave without changing clicks."""
+
+    hover_entered = pyqtSignal()
+    hover_left = pyqtSignal()
+
+    def enterEvent(self, event):
+        self.hover_entered.emit()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hover_left.emit()
+        super().leaveEvent(event)
+
+
+class LiveLogPreview(QLabel):
+    """Tooltip-like live preview for the last few lines of one log file."""
+
+    def __init__(self, anchor, title, content_provider, parent=None):
+        super().__init__(parent, Qt.WindowType.ToolTip)
+        self.anchor = anchor
+        self.title = title
+        self.content_provider = content_provider
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setFont(QFont("Consolas", 9))
+        self.setMargin(9)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setStyleSheet(
+            "QLabel {"
+            " background: #171717; color: #e8e8e8;"
+            " border: 1px solid #5c5c5c; border-radius: 5px;"
+            " padding: 3px;"
+            "}"
+        )
+
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setInterval(500)
+        self.refresh_timer.timeout.connect(self.refresh_content)
+
+    def show_preview(self):
+        self.refresh_content()
+        self._position_near_anchor()
+        self.show()
+        self.raise_()
+        self.refresh_timer.start()
+
+    def hide_preview(self):
+        self.refresh_timer.stop()
+        self.hide()
+
+    def refresh_content(self):
+        body = self.content_provider()
+        self.setText(f"{self.title}\n{'-' * 72}\n{body}")
+        self.adjustSize()
+        if self.isVisible():
+            self._position_near_anchor()
+
+    def _position_near_anchor(self):
+        anchor_pos = self.anchor.mapToGlobal(QPoint(0, self.anchor.height() + 5))
+        screen = QGuiApplication.screenAt(anchor_pos)
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+
+        x = anchor_pos.x()
+        y = anchor_pos.y()
+        if screen is not None:
+            bounds = screen.availableGeometry()
+            x = min(max(x, bounds.left()), bounds.right() - self.width())
+            if y + self.height() > bounds.bottom():
+                y = self.anchor.mapToGlobal(QPoint(0, -self.height() - 5)).y()
+            y = min(max(y, bounds.top()), bounds.bottom() - self.height())
+        self.move(x, y)
 
 
 class AppControlWidget(QWidget):
@@ -160,16 +279,32 @@ class AppControlWidget(QWidget):
         self.btn_stop.setFixedWidth(50)
         self.btn_stop.clicked.connect(self.on_stop)
 
-        # Output / Error log buttons (smaller width for compactness)
-        self.btn_ologs = QPushButton("O.Logs")
+        # Output / Error log buttons. Hover shows a live 7-line preview;
+        # clicking still opens the corresponding log file.
+        self.btn_ologs = HoverLogButton("O.Logs")
         self.btn_ologs.setFixedWidth(40)
         self.btn_ologs.clicked.connect(self.manager.view_output_log)
-        self.btn_ologs.setToolTip("Open latest output log file (.out.log)")
 
-        self.btn_elogs = QPushButton("E.Logs")
+        self.btn_elogs = HoverLogButton("E.Logs")
         self.btn_elogs.setFixedWidth(40)
         self.btn_elogs.clicked.connect(self.manager.view_error_log)
-        self.btn_elogs.setToolTip("Open latest error log file (.err.log)")
+
+        self.output_log_preview = LiveLogPreview(
+            self.btn_ologs,
+            f"{manager.name} - output log (last 7 lines)",
+            lambda: self.manager.read_log_tail("out"),
+            self,
+        )
+        self.error_log_preview = LiveLogPreview(
+            self.btn_elogs,
+            f"{manager.name} - error log (last 7 lines)",
+            lambda: self.manager.read_log_tail("err"),
+            self,
+        )
+        self.btn_ologs.hover_entered.connect(self.output_log_preview.show_preview)
+        self.btn_ologs.hover_left.connect(self.output_log_preview.hide_preview)
+        self.btn_elogs.hover_entered.connect(self.error_log_preview.show_preview)
+        self.btn_elogs.hover_left.connect(self.error_log_preview.hide_preview)
 
         layout.addWidget(self.lbl_name)
         layout.addWidget(self.lbl_status)
@@ -215,13 +350,18 @@ class AppControlWidget(QWidget):
         self.update_ui()
 
     def on_name_clicked(self):
-        """Open the application's working directory when the name label is clicked."""
-        workdir = self.manager.app_config.get("workdir") or os.getcwd()
+        """Open the same working directory used when launching the app."""
+        workdir = self.manager.get_workdir() or os.getcwd()
         if os.path.exists(workdir):
             if is_windows():
                 os.startfile(workdir)
             else:
                 subprocess.Popen(["xdg-open", workdir])
+
+    def hideEvent(self, event):
+        self.output_log_preview.hide_preview()
+        self.error_log_preview.hide_preview()
+        super().hideEvent(event)
 
 
 class SystemTrayApp(QSystemTrayIcon):

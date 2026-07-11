@@ -80,6 +80,28 @@ class AppController:
     def list_apps(self):
         return self.config_manager.get_apps()
 
+    def get_app_workdir(self, app_name):
+        """Resolve the directory opened when the app name is clicked in the tray."""
+        app_config = self.config_manager.get_app(app_name)
+        if not app_config:
+            return None
+
+        try:
+            runner = self._get_runner(app_config)
+
+            # UV command entries may encode the repo directly in the command
+            # instead of declaring path/workdir. Infer it for tray navigation
+            # without changing the working directory used to launch the app.
+            if isinstance(runner, UvRunner) and not app_config.get("path"):
+                command = app_config.get("command") or app_config.get("cmd")
+                inferred = runner._infer_workdir_from_command(command)
+                if inferred:
+                    return inferred
+
+            return runner.get_workdir()
+        except (OSError, TypeError, ValueError):
+            return app_config.get("workdir")
+
     def get_app_status(self, app_name):
         if not self.session_manager:
             return {"status": "UNKNOWN"}
