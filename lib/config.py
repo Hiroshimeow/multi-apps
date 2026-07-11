@@ -1,4 +1,6 @@
 import os
+import re
+import unicodedata
 from copy import deepcopy
 from typing import Any
 
@@ -12,6 +14,14 @@ DEFAULT_GLOBAL_CONFIG = {
     "session": "subprocess",
     "multi_run": False,
 }
+DEFAULT_CLOSE_TIMEOUT = 5.0
+
+
+def slugify_app_id(value: str) -> str:
+    text = str(value).translate(str.maketrans({"Đ": "D", "đ": "d"}))
+    normalized = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", normalized).strip("-").lower()
+    return slug or "app"
 
 
 class ConfigManager:
@@ -55,10 +65,17 @@ class ConfigManager:
         global_config["_config_dir"] = self.config_dir
 
         apps = []
+        seen_ids = set()
         for raw_app in raw_config.get("apps") or []:
             app = self._normalize_app(raw_app, global_config)
-            if app:
-                apps.append(app)
+            if not app:
+                continue
+            app_id = app["id"]
+            if app_id in seen_ids:
+                print_warning(f"Skipping app '{app['name']}': duplicate id '{app_id}'.")
+                continue
+            seen_ids.add(app_id)
+            apps.append(app)
 
         return {"global": global_config, "apps": apps}
 
@@ -74,6 +91,8 @@ class ConfigManager:
             return None
 
         safe_name = name.replace("..", "").replace("/", "_").replace("\\", "_")
+        raw_id = str(raw_app.get("id") or "").strip()
+        app_id = raw_id or slugify_app_id(name)
         path = resolve_path(raw_app.get("path") or self.config_dir, self.config_dir)
 
         raw_args = raw_app.get("args") or []
@@ -85,7 +104,19 @@ class ConfigManager:
             print_warning(f"Ignoring invalid args for '{safe_name}': expected string or list.")
             args = []
 
+        raw_close_timeout = raw_app.get("close_timeout", DEFAULT_CLOSE_TIMEOUT)
+        try:
+            close_timeout = float(raw_close_timeout)
+            if close_timeout <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            print_warning(
+                f"Invalid close_timeout for '{safe_name}'; using {DEFAULT_CLOSE_TIMEOUT}."
+            )
+            close_timeout = DEFAULT_CLOSE_TIMEOUT
+
         return {
+            "id": app_id,
             "name": safe_name,
             "path": path,
             "command": command,
@@ -93,6 +124,9 @@ class ConfigManager:
             "enabled": bool(raw_app.get("enabled", True)),
             "auto_start": bool(raw_app.get("auto_start", False)),
             "multi_run": bool(raw_app.get("multi_run", global_config["multi_run"])),
+            "close_ask": bool(raw_app.get("close_ask", False)),
+            "args_edit": bool(raw_app.get("args_edit", False)),
+            "close_timeout": close_timeout,
             "os": raw_app.get("os"),
         }
 
@@ -130,5 +164,11 @@ class ConfigManager:
     def get_app(self, name):
         return next(
             (app for app in self.config.get("apps", []) if app["name"] == name),
+            None,
+        )
+
+    def get_app_by_id(self, app_id):
+        return next(
+            (app for app in self.config.get("apps", []) if app["id"] == app_id),
             None,
         )
