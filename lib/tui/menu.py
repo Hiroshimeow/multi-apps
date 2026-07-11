@@ -122,7 +122,7 @@ class InteractiveMenu:
     def _action_start(self):
         self._show_message("Starting selected apps...")
         for app_name in self.selected_apps:
-            self.controller.start_app(app_name)
+            self.controller.start_app(app_name, wait_for_ready=True)
         time.sleep(1)
 
     def _action_stop(self):
@@ -136,7 +136,7 @@ class InteractiveMenu:
         for app_name in self.selected_apps:
             self.controller.stop_app(app_name)
             time.sleep(0.5)
-            self.controller.start_app(app_name)
+            self.controller.start_app(app_name, wait_for_ready=True)
         time.sleep(1)
 
     def _action_stop_all(self):

@@ -6,12 +6,14 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from lib.config import ConfigManager
+from lib.core import AppController
 from lib.runners.command_runner import CommandRunner
 from lib.runtime.models import RunRecord
 from lib.runtime.process_identity import get_process_created_at, process_matches
+from lib.runtime.registry import RuntimeRegistry
 from lib.session.subprocess_session import SubprocessSessionManager
 
 
@@ -428,6 +430,157 @@ class SubprocessSessionTests(unittest.TestCase):
                 "orphaned",
             )
             self.assertTrue(process_matches(os.getpid(), current_created_at))
+
+    def test_starting_reconcile_keeps_verified_state_during_temporary_ipc_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            current_created_at = get_process_created_at(os.getpid())
+            self.assertIsNotNone(current_created_at)
+            record = RunRecord.create(
+                app_id="starting-ipc",
+                path=str(root),
+                command="unused",
+                run_id="starting-ipc-run",
+            )
+            record.keeper_pid = os.getpid()
+            record.keeper_created_at = current_created_at
+            record.state = "starting"
+            session.registry.save(record)
+
+            with patch.object(
+                session.client,
+                "status",
+                side_effect=ConnectionError("listener not ready"),
+            ):
+                reconciled = session.reconcile("starting-ipc")[0]
+
+            self.assertEqual(reconciled.state, "starting")
+            self.assertEqual(
+                session.registry.load(record.run_id).state,
+                "starting",
+            )
+            session.registry.delete(record.run_id)
+
+    def test_controller_and_gui_use_explicit_readiness_semantics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app = {
+                "id": "caller-semantics",
+                "name": "Caller Semantics",
+                "path": str(root),
+                "command": "unused",
+                "args": [],
+                "multi_run": False,
+            }
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            controller = AppController.__new__(AppController)
+            controller.config = {"global": {}}
+            controller.config_manager = MagicMock()
+            controller.config_manager.get_app.return_value = app
+            controller.session_manager = session
+
+            with patch.object(
+                session,
+                "start",
+                return_value=(True, "accepted"),
+            ) as start:
+                self.assertTrue(
+                    controller.start_app("Caller Semantics", wait_for_ready=False)
+                )
+            self.assertFalse(start.call_args.kwargs["wait_for_ready"])
+
+            from multi import AppManager
+
+            gui_controller = MagicMock()
+            gui_controller.config_manager.get_app.return_value = app
+            gui_controller.start_app.return_value = True
+            manager = AppManager(gui_controller, app["name"])
+            success, _ = manager.launch()
+
+            self.assertTrue(success)
+            gui_controller.start_app.assert_called_once_with(
+                app["name"],
+                wait_for_ready=False,
+            )
+
+    @unittest.skipIf(os.name == "nt", "TUI is Linux-only")
+    def test_tui_uses_synchronous_readiness(self):
+        from lib.tui.menu import InteractiveMenu
+
+        controller = MagicMock()
+        menu = InteractiveMenu.__new__(InteractiveMenu)
+        menu.controller = controller
+        menu.selected_apps = {"Demo"}
+
+        with patch("lib.tui.menu.time.sleep"):
+            menu._action_start()
+
+        controller.start_app.assert_called_once_with(
+            "Demo",
+            wait_for_ready=True,
+        )
+
+    def test_cli_invalid_command_reports_synchronous_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "setting.yaml"
+            config_path.write_text(
+                """
+global:
+  session: subprocess
+  log_dir: ./logs
+apps:
+  - id: broken-cli
+    name: Broken CLI
+    path: .
+    command: command-that-does-not-exist-multi-run-apps
+    args: []
+    enabled: true
+    multi_run: false
+    close_timeout: 0.2
+""".strip(),
+                encoding="utf-8",
+            )
+            project_root = Path(__file__).resolve().parents[1]
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(project_root / "cli.py"),
+                    "start",
+                    "Broken CLI",
+                    "--config",
+                    str(config_path),
+                ],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+
+            self.assertEqual(
+                completed.returncode,
+                1,
+                f"stdout={completed.stdout}\nstderr={completed.stderr}",
+            )
+            self.assertIn(
+                "Failed to start 'Broken CLI'",
+                completed.stdout + completed.stderr,
+            )
+            records = RuntimeRegistry(root / ".runtime").list_records()
+            self.assertEqual(len(records), 1)
+            record = records[0]
+            self.assertIn(record.state, {"failed", "stopped"})
+            self.assertFalse(
+                process_matches(record.keeper_pid, record.keeper_created_at)
+            )
+            self.assertFalse(process_matches(record.root_pid, record.root_created_at))
 
 
 if __name__ == "__main__":

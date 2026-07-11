@@ -44,8 +44,8 @@ class AppManager:
         self.app_config = self.controller.config_manager.get_app(app_name)
 
     def launch(self):
-        """Start the app via controller."""
-        success = self.controller.start_app(self.name)
+        """Start the app without blocking the Qt event thread for readiness."""
+        success = self.controller.start_app(self.name, wait_for_ready=False)
         return success, "Started" if success else "Failed"
 
     def stop_all(self):

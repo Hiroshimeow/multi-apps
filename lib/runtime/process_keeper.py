@@ -208,7 +208,7 @@ class ProcessKeeper:
             self._update_record(
                 root_pid=self.process.pid,
                 root_created_at=float(get_process_created_at(self.process.pid) or 0.0),
-                state="running",
+                state="stopping" if self.stop_requested.is_set() else "running",
             )
             return self._monitor()
         except Exception as exc:

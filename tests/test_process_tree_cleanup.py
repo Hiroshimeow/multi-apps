@@ -96,6 +96,50 @@ class ProcessTreeCleanupTests(unittest.TestCase):
             finally:
                 self._force_cleanup(session)
 
+    def test_immediate_stop_during_starting_closes_complete_tree(self):
+        fixture = Path(__file__).parent / "fixtures" / "process_tree_helper.py"
+        for index in range(3):
+            with self.subTest(run=index), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                pid_file = root / "parent.pid"
+                child_pid_file = root / "child.pid"
+                app_id = f"immediate-tree-{index}"
+                app = {
+                    "id": app_id,
+                    "name": f"Immediate Tree {index}",
+                    "path": str(root),
+                    "command": self._command(fixture, pid_file, child_pid_file),
+                    "args": [],
+                    "multi_run": False,
+                    "close_timeout": 0.5,
+                }
+                session = SubprocessSessionManager(
+                    {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+                )
+                try:
+                    success, message = session.start(CommandRunner(app, {}))
+                    self.assertTrue(success, message)
+
+                    success, message = session.stop(app_id)
+                    self.assertTrue(success, message)
+                    self.assertTrue(pid_file.exists(), "parent never started")
+                    self.assertTrue(child_pid_file.exists(), "descendant never started")
+
+                    parent_pid = int(pid_file.read_text(encoding="utf-8"))
+                    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+                    record = session.registry.list_records()[0]
+                    self.assertEqual(record.state, "stopped")
+                    self.assertFalse(
+                        process_matches(record.keeper_pid, record.keeper_created_at)
+                    )
+                    self.assertFalse(
+                        process_matches(record.root_pid, record.root_created_at)
+                    )
+                    self.assertIsNone(get_process_created_at(parent_pid))
+                    self.assertIsNone(get_process_created_at(child_pid))
+                finally:
+                    self._force_cleanup(session)
+
     def test_force_timeout_closes_termination_resistant_descendant(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

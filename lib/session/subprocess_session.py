@@ -13,6 +13,8 @@ from ..runtime.process_identity import process_matches
 from ..runtime.registry import RuntimeRegistry
 
 ACTIVE_STATES = frozenset({"starting", "running", "stopping"})
+STARTING_STOP_RETRY_TIMEOUT = 3.0
+STOP_IPC_RETRY_INTERVAL = 0.05
 
 
 class SubprocessSessionManager(BaseSessionManager):
@@ -221,24 +223,11 @@ class SubprocessSessionManager(BaseSessionManager):
                     f"Run {record.run_id} is orphaned; refusing to stop an unverified process"
                 )
                 continue
-            if not process_matches(record.keeper_pid, record.keeper_created_at):
-                self._update_if_changed(record, state="orphaned")
-                failures.append(
-                    f"Run {record.run_id} keeper identity could not be verified"
-                )
+            requested_record, error = self._request_stop_with_retry(record)
+            if requested_record is None:
+                failures.append(f"Run {record.run_id}: {error}")
                 continue
-            try:
-                response = self.client.stop(record.run_id)
-            except (ConnectionError, TimeoutError) as exc:
-                self._update_if_changed(record, state="orphaned")
-                failures.append(f"Run {record.run_id}: {exc}")
-                continue
-            if not response.get("ok"):
-                failures.append(
-                    f"Run {record.run_id}: {response.get('message', 'stop rejected')}"
-                )
-                continue
-            requested.append(record)
+            requested.append(requested_record)
 
         for record in requested:
             deadline = time.monotonic() + record.close_timeout + 5.0
@@ -266,11 +255,44 @@ class SubprocessSessionManager(BaseSessionManager):
                     f"Run {record.run_id} did not stop before timeout"
                     + (f" ({', '.join(alive)} still alive)" if alive else "")
                 )
-            self.client.reap_finished(record.run_id)
+            self.client.wait_for_reap(record.run_id, timeout=2.0)
 
         if failures:
             return False, "; ".join(failures)
         return True, "Stopped."
+
+    def _request_stop_with_retry(self, record):
+        deadline = time.monotonic() + (
+            STARTING_STOP_RETRY_TIMEOUT if record.state == "starting" else 1.0
+        )
+        last_error = None
+
+        while True:
+            current = self.registry.load(record.run_id) or record
+            keeper_alive, root_alive = self._record_processes_alive(current)
+            if not keeper_alive:
+                target_state = "orphaned" if root_alive else "stopped"
+                self._update_if_changed(current, state=target_state)
+                if root_alive:
+                    return None, "keeper identity was lost while the root remained alive"
+                return None, "keeper exited before Stop could be delivered"
+
+            try:
+                response = self.client.stop(current.run_id, timeout=0.5)
+            except (ConnectionError, TimeoutError) as exc:
+                last_error = exc
+                if time.monotonic() < deadline:
+                    time.sleep(STOP_IPC_RETRY_INTERVAL)
+                    continue
+                return None, (
+                    "verified keeper did not expose Stop IPC before the retry timeout: "
+                    f"{last_error}"
+                )
+
+            if response.get("ok"):
+                latest = self.registry.load(current.run_id) or current
+                return latest, None
+            return None, response.get("message", "stop rejected")
 
     def is_running(self, app_name):
         return bool(self._active_records(app_name))
@@ -355,6 +377,8 @@ class SubprocessSessionManager(BaseSessionManager):
         try:
             response = self.client.status(record.run_id, timeout=0.5)
         except (ConnectionError, TimeoutError):
+            if record.state == "starting":
+                return record
             return self._update_if_changed(record, state="orphaned")
 
         if not response.get("ok") or not self._status_identity_matches(record, response):

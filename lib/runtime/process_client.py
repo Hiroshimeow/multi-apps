@@ -9,6 +9,7 @@ from typing import Any
 
 from .ipc import request
 from .process_identity import get_process_created_at
+from .registry import RuntimeRegistry
 
 
 class ProcessClient:
@@ -19,6 +20,7 @@ class ProcessClient:
     ) -> None:
         self.runtime_dir = Path(runtime_dir)
         self.project_root = Path(project_root)
+        self.registry = RuntimeRegistry(self.runtime_dir)
         self._keepers: dict[str, subprocess.Popen[bytes]] = {}
 
     def launch_keeper(self, run_id: str) -> tuple[int, float]:
@@ -75,24 +77,60 @@ class ProcessClient:
             raise RuntimeError(f"Could not verify keeper identity for run {run_id}")
         return process.pid, float(created_at)
 
-    def wait_until_ready(self, run_id: str, timeout: float = 8.0) -> dict[str, Any]:
+    def wait_until_ready(
+        self,
+        run_id: str,
+        timeout: float = 8.0,
+        stable_for: float = 1.0,
+    ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
+        running_since: float | None = None
         last_error: Exception | None = None
+        last_response: dict[str, Any] | None = None
         while time.monotonic() < deadline:
+            terminal = self._terminal_record_error(run_id)
+            if terminal is not None:
+                raise terminal
             try:
                 response = self.status(run_id, timeout=0.5)
+                last_response = response
                 state = response.get("state")
-                if response.get("ok") and state == "running":
-                    if int(response.get("root_pid") or 0) > 0:
+                if (
+                    response.get("ok")
+                    and state == "running"
+                    and int(response.get("root_pid") or 0) > 0
+                    and response.get("tree_alive", True)
+                ):
+                    now = time.monotonic()
+                    if running_since is None:
+                        running_since = now
+                    if now - running_since >= stable_for:
                         return response
+                else:
+                    running_since = None
                 if state in {"failed", "stopped"}:
+                    exit_code = response.get("exit_code")
                     raise RuntimeError(
-                        response.get("message") or f"Keeper entered terminal state: {state}"
+                        response.get("message")
+                        or f"Keeper entered terminal state: {state} (exit={exit_code})"
                     )
             except (ConnectionError, TimeoutError) as exc:
+                running_since = None
                 last_error = exc
+                terminal = self._terminal_record_error(run_id)
+                if terminal is not None:
+                    raise terminal
             time.sleep(0.05)
-        raise TimeoutError(f"Keeper for run {run_id} did not become ready: {last_error}")
+        detail = last_error or last_response
+        raise TimeoutError(f"Keeper for run {run_id} did not become ready: {detail}")
+
+    def _terminal_record_error(self, run_id: str) -> RuntimeError | None:
+        record = self.registry.load(run_id)
+        if record is None or record.state not in {"stopped", "failed", "orphaned"}:
+            return None
+        return RuntimeError(
+            f"Keeper entered terminal state: {record.state} (exit={record.exit_code})"
+        )
 
     def ping(self, run_id: str, timeout: float = 1.0) -> dict[str, Any]:
         return request(self.runtime_dir, run_id, {"command": "ping"}, timeout)
@@ -111,3 +149,14 @@ class ProcessClient:
             process = self._keepers.get(selected_run_id)
             if process is not None and process.poll() is not None:
                 self._keepers.pop(selected_run_id, None)
+
+    def wait_for_reap(self, run_id: str, timeout: float = 2.0) -> bool:
+        process = self._keepers.get(run_id)
+        if process is None:
+            return True
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False
+        self._keepers.pop(run_id, None)
+        return True

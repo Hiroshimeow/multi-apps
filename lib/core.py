@@ -33,14 +33,21 @@ class AppController:
             return {"status": "STOPPED"}
         return self.session_manager.get_info(self._session_key(app))
 
-    def start_app(self, app_name):
+    def start_app(self, app_name, *, wait_for_ready=True):
         app = self.config_manager.get_app(app_name)
         if not app:
             print_error(f"App '{app_name}' not found.")
             return False
 
         try:
-            success, message = self.session_manager.start(self._get_runner(app))
+            runner = self._get_runner(app)
+            if isinstance(self.session_manager, SubprocessSessionManager):
+                success, message = self.session_manager.start(
+                    runner,
+                    wait_for_ready=wait_for_ready,
+                )
+            else:
+                success, message = self.session_manager.start(runner)
         except Exception as exc:
             print_error(f"Error starting '{app_name}': {exc}")
             return False
@@ -64,9 +71,9 @@ class AppController:
             print_warning(f"Could not stop '{app_name}': {message}")
         return success
 
-    def start_all(self):
+    def start_all(self, *, wait_for_ready=True):
         for app in self.config_manager.get_apps(enabled_only=True):
-            self.start_app(app["name"])
+            self.start_app(app["name"], wait_for_ready=wait_for_ready)
 
     def stop_all(self):
         for app in self.config_manager.get_apps(enabled_only=True):

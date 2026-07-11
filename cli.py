@@ -48,15 +48,25 @@ def main():
         print("Please specify app names or use --all")
         sys.exit(1)
 
+    action_failed = False
     for app_name in target_apps:
         if args.command == "start":
-            controller.start_app(app_name)
+            if not controller.start_app(app_name, wait_for_ready=True):
+                action_failed = True
         elif args.command == "stop":
-            controller.stop_app(app_name)
+            if not controller.stop_app(app_name):
+                action_failed = True
         elif args.command == "restart":
-            controller.stop_app(app_name)
-            import time; time.sleep(1)
-            controller.start_app(app_name)
+            stopped = controller.stop_app(app_name)
+            import time
+
+            time.sleep(1)
+            started = controller.start_app(app_name, wait_for_ready=True)
+            if not stopped or not started:
+                action_failed = True
+
+    if action_failed:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
