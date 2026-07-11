@@ -1,18 +1,46 @@
-# Python-generated files
+# Python caches and test artifacts
 __pycache__/
-*.py[oc]
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Build outputs
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
 
-# Virtual environments
-.venv
-
-# Runtime outputs
+# Runtime output
 logs/
 *.log
-*.zip
+*.tmp
+*.bak
 
-# Local plugin applications
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local analysis/review artifacts
+.gitnexus/
+*_review_artifact/
+
+# Local archives
+*.zip
+*.7z
+
+# Local plugin applications; each plugin may manage its own Git repository
 /tools/

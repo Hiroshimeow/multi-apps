@@ -1,176 +1,117 @@
-# 🚀 Multi-Run Apps Manager
+# Multi-Run Apps
 
-Một công cụ quản lý và khởi chạy đa ứng dụng (Python, Gunicorn, Shell, Custom Commands) hỗ trợ cả Linux (CLI + tmux) và Windows (GUI).
+Trình khởi chạy tập trung cho các ứng dụng và công cụ cục bộ. Dự án cung cấp System Tray trên Windows, CLI/TUI trên Linux, quản lý process, thư mục làm việc và log từ một file `setting.yaml`.
 
-## ✨ Tính năng chính
+## Kiến trúc repository
 
-*   **Đa nền tảng**: 
-    *   **Linux**: CLI tương tác (Interactive Menu), quản lý session bằng `tmux`.
-    *   **Windows**: GUI System Tray (PyQt6).
-*   **Hỗ trợ nhiều loại App**:
-    *   Script Python (tự động activate Conda/Venv).
-    *   Gunicorn Server (Flask/Django/FastAPI).
-    *   Shell scripts (`.sh`, `.bat`, `.cmd`, `.vbs` trên Windows).
-    *   Custom commands (Lệnh trực tiếp trong PATH, Node.js, binary, v.v.).
-*   **Quản lý tập trung**: Cấu hình tất cả trong một file `setting.yaml`.
-*   **Logging**: Tự động redirect output ra file log riêng biệt, dễ dàng xem log nhanh từ System Tray.
-*   **An toàn**: Kiểm tra trạng thái running, tránh chạy trùng lặp, graceful shutdown.
+Repository này chỉ quản lý launcher, cấu hình và mã điều phối.
 
-## 🛠️ Yêu cầu hệ thống
+- `tools/` chứa các plugin/app cục bộ và bị loại khỏi Git của `multi-run-apps`.
+- Mỗi plugin trong `tools/` có thể là một Git repository độc lập.
+- Thay đổi source của plugin chỉ cần commit trong repository của plugin; không cần commit lại `multi-run-apps`.
+- `logs/`, cache Python, file nén và artifact phân tích đều không được đưa vào Git.
 
-*   **Python**: 3.8 trở lên
-*   **Linux**: `tmux` (để quản lý session chạy ngầm)
-*   **Thư viện Python**:
-    ```bash
-    pip install pyyaml psutil rich
-    ```
-    *   `pyyaml`: Đọc file cấu hình.
-    *   `psutil`: Quản lý process.
-    *   `rich`: Giao diện dòng lệnh đẹp mắt.
+## Yêu cầu
 
-## 🚀 Hướng dẫn sử dụng (Linux)
+- Python 3.13 trở lên
+- [uv](https://docs.astral.sh/uv/)
+- Windows: System Tray dùng PyQt6
+- Linux: cần `tmux` cho session chạy nền
 
-### 1. Cấu hình (`setting.yaml`)
+## Cài đặt
 
-Chỉnh sửa file `setting.yaml` để định nghĩa các ứng dụng của bạn:
-
-```yaml
-global:
-  default_conda_env: "ana11"  # Môi trường Conda mặc định
-  log:
-    dir: "./logs"             # Nơi lưu log
-
-apps:
-  # 1. Python Script truyền thống (Sử dụng Conda/Venv)
-  - name: "My Python Tool"
-    type: "python"
-    path: "E:/projects/tool.py"
-    env: { type: "conda", name: "ana11" }
-    enabled: true
-
-  # 2. Sử dụng UV (Hiện đại, cực nhanh)
-  - name: "UV App"
-    type: "uv"
-    path: "main.py"                 # File script
-    workdir: "E:/projects/my-uv"   # Thư mục chứa pyproject.toml
-    args: ["--port", "8000"]
-    enabled: true
-
-  # 3. Chạy lệnh trực tiếp (Command)
-  - name: "OpenClaw Gateway"
-    command: "openclaw gateway run"
-    enabled: true
-
-  # 4. Windows Scripts (.bat, .vbs)
-  - name: "Backup Task"
-    path: "C:/scripts/backup.bat"   # Tự động chạy qua cmd /c
-    enabled: true
-
-  - name: "Popup Notifier"
-    path: "C:/scripts/alert.vbs"    # Tự động chạy qua cscript //nologo
-    enabled: true
+```bash
+uv sync
 ```
 
-### 2. Chạy Interactive Menu
+## Chạy
 
-Cách dễ nhất để sử dụng là chạy script `run.sh` không tham số:
+### Windows
+
+```powershell
+uv run multi.py
+```
+
+Có thể chạy `multi_run.vbs` để mở launcher ẩn, không giữ cửa sổ terminal.
+
+### Linux CLI/TUI
 
 ```bash
 ./run.sh
 ```
 
-Giao diện menu sẽ hiện ra:
-*   **Phím Lên/Xuống**: Di chuyển để chọn ứng dụng.
-*   **Phím Space**: Chọn/Bỏ chọn ứng dụng (Toggle `[x]`).
-*   **Phím S**: Start các app đã chọn.
-*   **Phím T**: Stop các app đã chọn.
-*   **Phím R**: Restart các app đã chọn.
-*   **Phím A**: Start tất cả (All).
-*   **Phím X**: Stop tất cả.
-*   **Phím Q**: Thoát.
-
-### 3. Chạy lệnh trực tiếp (CLI)
-
-Bạn có thể dùng lệnh tắt để tích hợp vào script khác:
+Hoặc chạy lệnh trực tiếp:
 
 ```bash
-# Start một app cụ thể
-./run.sh start "Amen API"
-
-# Start tất cả app đang enabled
-./run.sh start --all
-
-# Stop app
-./run.sh stop "Amen API"
-
-# Restart app
-./run.sh restart "Amen API"
-
-# Xem trạng thái
-./run.sh status
-
-# Liệt kê danh sách app
-./run.sh list
+uv run python cli.py list
+uv run python cli.py status
+uv run python cli.py start "Tên ứng dụng"
+uv run python cli.py stop "Tên ứng dụng"
+uv run python cli.py restart "Tên ứng dụng"
 ```
 
-### 4. Xem Logs
+Dùng `--all` để áp dụng cho toàn bộ app đang bật.
 
-Log được lưu tự động trong thư mục `logs/` với format `tên-app_ngày.log`.
+## Cấu hình ứng dụng
 
-```bash
-# Xem log file mới nhất của app
-cat logs/amen-api_2026-01-29.log
+Các app được khai báo trong `setting.yaml`.
 
-# Theo dõi log realtime (tail -f)
-tail -f logs/amen-api_*.log
+```yaml
+global:
+  log:
+    dir: "./logs"
+  session:
+    type: "subprocess"
+
+apps:
+  - name: "Local plugin"
+    type: "uv"
+    path: "./tools/local-plugin/main.py"
+    enabled: true
+
+  - name: "External project"
+    type: "uv"
+    command: "uv run --directory E:/projects/example main.py"
+    enabled: true
+
+  - name: "Custom command"
+    type: "command"
+    command: "some-command --serve"
+    enabled: true
 ```
 
-### 5. Debugging (tmux)
+Các trường thường dùng:
 
-Mỗi app chạy trong một `tmux session` riêng biệt (định dạng `app-<tên-slug>`).
+- `name`: tên hiển thị và định danh app.
+- `type`: `python`, `uv`, `gunicorn`, `shell`, `cmd` hoặc `command`.
+- `path`: script hoặc executable cần chạy.
+- `command`: câu lệnh đầy đủ, dùng thay cho `path`.
+- `workdir`: thư mục làm việc; launcher tự suy luận khi có thể.
+- `env`: Conda hoặc virtual environment riêng của app.
+- `args`, `env_vars`: tham số và biến môi trường.
+- `enabled`, `auto_start`, `multi_run`, `os`: điều khiển khả dụng và cách chạy.
 
-```bash
-# Liệt kê các session đang chạy
-tmux list-sessions
+## Log và điều khiển
 
-# Attach vào session để debug trực tiếp
-tmux attach -t app-amen-api
+Log mặc định nằm trong `logs/` với hai stream:
 
-# Detach khỏi session (quay lại terminal chính)
-# Nhấn tổ hợp phím: Ctrl+B, sau đó nhấn D
+```text
+<App name>.out.log
+<App name>.err.log
 ```
 
-## 🖥️ Hướng dẫn sử dụng (Windows)
+Trên Windows, menu System Tray cho phép start/stop app, mở thư mục làm việc, mở log và xem nhanh các dòng log cuối khi rê chuột lên nút log.
 
-1.  Cài đặt thư viện: `pip install pyyaml psutil PyQt6`.
-2.  Chạy file `multi.py` hoặc `multi_run.vbs` (để chạy ẩn).
-3.  Icon sẽ hiện dưới System Tray. Chuột phải để bật menu quản lý.
-4.  **Tính năng mới**:
-    *   **Nút Logs**: Mở nhanh thư mục chứa log của từng ứng dụng.
-    *   **Refresh Menu**: Cập nhật lại danh sách ứng dụng khi thay đổi `setting.yaml` mà không cần khởi động lại launcher.
-    *   **Auto-detect**: Tự động nhận diện loại ứng dụng (Python/Shell/Command) dựa trên đuôi file hoặc câu lệnh.
-    *   **Smart Start**: Tự động vô hiệu hóa nút Start nếu ứng dụng đang chạy (trừ khi bật `multi_run: true`).
+## Cấu trúc chính
 
-## 📂 Cấu trúc Project
-
-```
+```text
 multi-run-apps/
-├── run.sh                  # Entry point (Linux)
-├── cli.py                  # Giao diện dòng lệnh chính
-├── setting.yaml            # File cấu hình
-├── lib/                    # Thư viện lõi
-│   ├── config.py           # Xử lý cấu hình
-│   ├── core.py             # Điều khiển luồng chính
-│   ├── runners/            # Các loại runner (python, gunicorn, shell...)
-│   └── session/            # Quản lý session (tmux)
-└── logs/                   # Thư mục chứa log
+├── multi.py              # Windows System Tray
+├── cli.py                # CLI/TUI entry point
+├── setting.yaml          # Danh sách app cục bộ
+├── lib/                  # Controller, runner và session manager
+├── tools/                # Plugin cục bộ, không thuộc Git repo này
+├── run.sh                # Linux launcher
+├── run.bat               # Windows console launcher
+└── multi_run.vbs         # Windows hidden launcher
 ```
-
-## ❓ Troubleshooting
-
-*   **Lỗi `tmux: command not found`**: Cài đặt tmux (`sudo apt install tmux`).
-*   **Lỗi `ModuleNotFoundError: No module named 'rich'`**: Cài đặt rich (`pip install rich`).
-*   **App báo RUNNING nhưng không thấy process**:
-    *   Check log trong `logs/`.
-    *   Attach vào tmux session để xem lỗi hiển thị trên màn hình console ảo.
-*   **Gunicorn không stop hẳn**: Script đã được tối ưu để kill cả process con, nhưng nếu vẫn bị kẹt, hãy chạy `./run.sh stop "App Name"` một lần nữa hoặc `pkill -f gunicorn`.

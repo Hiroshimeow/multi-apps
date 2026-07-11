@@ -1,11 +1,9 @@
 @echo off
-set PYTHON_EXE=C:\Users\admin\miniconda3\envs\ana11\python.exe
-
-"%PYTHON_EXE%" multi.py
-
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo Application exited with error code %ERRORLEVEL%.
-    pause
+setlocal
+cd /d "%~dp0"
+where uv >nul 2>nul
+if errorlevel 1 (
+    echo Error: uv is not installed or is not in PATH.
+    exit /b 1
 )
-
+uv run multi.py
