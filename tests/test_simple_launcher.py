@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 from lib.config import ConfigManager
 from lib.runners.command_runner import CommandRunner
+from lib.runtime.models import RunRecord
+from lib.runtime.process_identity import get_process_created_at, process_matches
 from lib.session.subprocess_session import SubprocessSessionManager
 
 
@@ -107,6 +109,11 @@ class SubprocessSessionTests(unittest.TestCase):
                     break
                 time.sleep(0.05)
             self.assertEqual(session.get_info("Smoke")["status"], "STOPPED")
+            reap_deadline = time.monotonic() + 2.0
+            while session.client._keepers and time.monotonic() < reap_deadline:
+                session.client.reap_finished()
+                time.sleep(0.02)
+            self.assertFalse(session.client._keepers)
 
     def test_repeated_natural_exits_remain_stopped_without_registry_warnings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -140,11 +147,287 @@ class SubprocessSessionTests(unittest.TestCase):
                     self.assertEqual(
                         session.get_info("natural-exit")["status"], "STOPPED"
                     )
+                    reap_deadline = time.monotonic() + 2.0
+                    while session.client._keepers and time.monotonic() < reap_deadline:
+                        session.client.reap_finished()
+                        time.sleep(0.02)
+                    self.assertFalse(session.client._keepers)
 
             records = session.registry.list_records()
             self.assertEqual(len(records), 5)
             self.assertTrue(all(record.state == "stopped" for record in records))
             warning.assert_not_called()
+
+    def test_start_accepts_starting_without_waiting_and_blocks_duplicate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            created_at = get_process_created_at(os.getpid())
+            self.assertIsNotNone(created_at)
+            app = {
+                "id": "accepted-start",
+                "name": "Accepted Start",
+                "path": str(root),
+                "command": "unused",
+                "args": [],
+                "multi_run": False,
+            }
+
+            with patch.object(
+                session.client,
+                "launch_keeper",
+                return_value=(os.getpid(), created_at),
+            ), patch.object(
+                session.client,
+                "wait_until_ready",
+                side_effect=AssertionError("GUI-facing Start must not wait"),
+            ):
+                success, message = session.start(CommandRunner(app, {}))
+                duplicate_success, duplicate_message = session.start(
+                    CommandRunner(app, {})
+                )
+
+            self.assertTrue(success, message)
+            self.assertIn("Accepted run", message)
+            record = session.registry.list_records()[0]
+            self.assertEqual(record.state, "starting")
+            self.assertFalse(duplicate_success, duplicate_message)
+            self.assertIn("already running", duplicate_message)
+            session.registry.delete(record.run_id)
+
+    def test_accepted_start_transitions_asynchronously(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            command_parts = [
+                sys.executable,
+                "-c",
+                "import time; time.sleep(30)",
+            ]
+            command = (
+                subprocess.list2cmdline(command_parts)
+                if os.name == "nt"
+                else shlex.join(command_parts)
+            )
+            app = {
+                "id": "async-start",
+                "name": "Async Start",
+                "path": str(root),
+                "command": command,
+                "args": [],
+                "multi_run": False,
+                "close_timeout": 0.2,
+            }
+
+            try:
+                with patch.object(
+                    session.client,
+                    "wait_until_ready",
+                    side_effect=AssertionError("GUI-facing Start must not wait"),
+                ):
+                    started_at = time.perf_counter()
+                    success, message = session.start(CommandRunner(app, {}))
+                    elapsed = time.perf_counter() - started_at
+
+                self.assertTrue(success, message)
+                self.assertLess(elapsed, 1.0)
+                deadline = time.monotonic() + 8.0
+                while time.monotonic() < deadline:
+                    record = session.registry.list_records()[0]
+                    if record.state == "running":
+                        break
+                    time.sleep(0.02)
+                self.assertEqual(record.state, "running")
+            finally:
+                session.stop("async-start")
+                reap_deadline = time.monotonic() + 2.0
+                while session.client._keepers and time.monotonic() < reap_deadline:
+                    session.client.reap_finished()
+                    time.sleep(0.02)
+                self.assertFalse(session.client._keepers)
+
+    def test_readiness_timeout_cleans_live_processes_before_failed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            process_args = [sys.executable, "-c", "import time; time.sleep(30)"]
+            keeper = subprocess.Popen(
+                process_args,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+            root_process = subprocess.Popen(
+                process_args,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+
+            def created_at(process):
+                deadline = time.monotonic() + 2.0
+                value = get_process_created_at(process.pid)
+                while value is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                    value = get_process_created_at(process.pid)
+                self.assertIsNotNone(value)
+                return value
+
+            keeper_created_at = created_at(keeper)
+            root_created_at = created_at(root_process)
+            registry = session.registry
+
+            class TimeoutClient:
+                def __init__(self):
+                    self.run_id = None
+
+                def launch_keeper(self, run_id):
+                    self.run_id = run_id
+                    return keeper.pid, keeper_created_at
+
+                def wait_until_ready(self, run_id, timeout=8.0):
+                    registry.update(
+                        run_id,
+                        state="starting",
+                        root_pid=root_process.pid,
+                        root_created_at=root_created_at,
+                    )
+                    raise TimeoutError("forced readiness timeout")
+
+                def status(self, run_id, timeout=1.0):
+                    record = registry.load(run_id)
+                    return {
+                        "ok": True,
+                        "state": "starting",
+                        "run_id": run_id,
+                        "app_id": record.app_id,
+                        "keeper_pid": keeper.pid,
+                        "keeper_created_at": keeper_created_at,
+                        "root_pid": root_process.pid,
+                        "root_created_at": root_created_at,
+                        "tree_alive": True,
+                    }
+
+                def stop(self, run_id, timeout=2.0):
+                    registry.update(run_id, state="stopping")
+                    for process in (root_process, keeper):
+                        if process.poll() is None:
+                            process.terminate()
+                    for process in (root_process, keeper):
+                        process.wait(timeout=3.0)
+                    return {"ok": True, "message": "Stop requested"}
+
+                def reap_finished(self, run_id=None):
+                    return None
+
+            session.client = TimeoutClient()
+            app = {
+                "id": "timeout-start",
+                "name": "Timeout Start",
+                "path": str(root),
+                "command": "unused",
+                "args": [],
+                "multi_run": False,
+                "close_timeout": 0.1,
+            }
+
+            try:
+                success, message = session.start(
+                    CommandRunner(app, {}), wait_for_ready=True
+                )
+                self.assertFalse(success, message)
+                record = session.registry.list_records()[0]
+                self.assertEqual(record.state, "failed")
+                self.assertFalse(
+                    process_matches(keeper.pid, keeper_created_at),
+                    "keeper remained alive behind failed state",
+                )
+                self.assertFalse(
+                    process_matches(root_process.pid, root_created_at),
+                    "root remained alive behind failed state",
+                )
+            finally:
+                for process in (root_process, keeper):
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait(timeout=3.0)
+
+    @unittest.skipUnless(os.name == "nt", "Windows process identity behavior")
+    def test_process_identity_rejects_exited_windows_process(self):
+        creationflags = subprocess.CREATE_NO_WINDOW
+        process = subprocess.Popen(
+            [sys.executable, "-c", "pass"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        created_at = get_process_created_at(process.pid)
+        self.assertIsNotNone(created_at)
+        process.wait(timeout=3.0)
+        self.assertFalse(process_matches(process.pid, created_at))
+
+    def test_get_info_self_corrects_dead_active_records_without_ipc(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            current_created_at = get_process_created_at(os.getpid())
+            self.assertIsNotNone(current_created_at)
+
+            dead = RunRecord.create(
+                app_id="stale-dead",
+                path=str(root),
+                command="unused",
+                run_id="stale-dead-run",
+            )
+            dead.keeper_pid = os.getpid()
+            dead.keeper_created_at = current_created_at + 1000.0
+            dead.state = "running"
+            session.registry.save(dead)
+
+            orphaned = RunRecord.create(
+                app_id="stale-root",
+                path=str(root),
+                command="unused",
+                run_id="stale-root-run",
+            )
+            orphaned.keeper_pid = os.getpid()
+            orphaned.keeper_created_at = current_created_at + 1000.0
+            orphaned.root_pid = os.getpid()
+            orphaned.root_created_at = current_created_at
+            orphaned.state = "running"
+            session.registry.save(orphaned)
+
+            with patch.object(
+                session.client,
+                "status",
+                side_effect=AssertionError("ordinary status must not use IPC"),
+            ):
+                dead_info = session.get_info("stale-dead")
+                orphaned_info = session.get_info("stale-root")
+
+            self.assertEqual(dead_info["status"], "STOPPED")
+            self.assertEqual(
+                session.registry.load(dead.run_id).state,
+                "stopped",
+            )
+            self.assertEqual(orphaned_info["status"], "ORPHANED")
+            self.assertEqual(
+                session.registry.load(orphaned.run_id).state,
+                "orphaned",
+            )
+            self.assertTrue(process_matches(os.getpid(), current_created_at))
 
 
 if __name__ == "__main__":

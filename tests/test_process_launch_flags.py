@@ -30,6 +30,30 @@ class WindowsProcessLaunchFlagTests(unittest.TestCase):
             self.assertEqual(popen.call_args.kwargs["stdout"], subprocess.DEVNULL)
             self.assertEqual(popen.call_args.kwargs["stderr"], subprocess.DEVNULL)
 
+    def test_unverified_keeper_identity_terminates_spawned_keeper(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            process = MagicMock()
+            process.pid = os.getpid()
+            process.poll.return_value = None
+            process.wait.return_value = 0
+            with patch(
+                "lib.runtime.process_client.subprocess.Popen",
+                return_value=process,
+            ), patch(
+                "lib.runtime.process_client.get_process_created_at",
+                return_value=None,
+            ), patch(
+                "lib.runtime.process_client.time.monotonic",
+                side_effect=[0.0, 3.0],
+            ):
+                client = ProcessClient(Path(temp_dir) / ".runtime", Path.cwd())
+                with self.assertRaisesRegex(RuntimeError, "Could not verify"):
+                    client.launch_keeper("run-identity-failure")
+
+            process.terminate.assert_called_once_with()
+            process.wait.assert_called_once_with(timeout=2.0)
+            self.assertNotIn("run-identity-failure", client._keepers)
+
     def test_bootstrap_shell_uses_no_window_flag(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             ready_file = Path(temp_dir) / "ready"

@@ -25,10 +25,9 @@ class SubprocessSessionManager(BaseSessionManager):
         self.client = ProcessClient(self.runtime_dir, self.project_root)
         self.reconcile()
 
-    def start(self, runner):
+    def start(self, runner, *, wait_for_ready=False):
         app_id = str(runner.app_config.get("id") or slugify_app_id(runner.name))
-        self.reconcile(app_id)
-        app_records = self._records_for(app_id)
+        app_records = self._refresh_dead_active_records(app_id)
         active = [record for record in app_records if record.state in ACTIVE_STATES]
         orphaned = [record for record in app_records if record.state == "orphaned"]
         if (active or orphaned) and not runner.app_config.get("multi_run", False):
@@ -60,20 +59,151 @@ class SubprocessSessionManager(BaseSessionManager):
 
         try:
             keeper_pid, keeper_created_at = self.client.launch_keeper(run_id)
-            self.registry.update(
+            record.keeper_pid = keeper_pid
+            record.keeper_created_at = keeper_created_at
+            current = self.registry.update(
                 run_id,
                 keeper_pid=keeper_pid,
                 keeper_created_at=keeper_created_at,
             )
-            response = self.client.wait_until_ready(run_id)
+            if current is None:
+                raise RuntimeError(f"Run record disappeared: {run_id}")
         except Exception as exc:
-            current = self.registry.load(run_id)
-            if current is not None and current.state not in {"stopped", "failed"}:
-                self.registry.update(run_id, state="failed")
-            return False, f"Keeper failed to start: {exc}"
+            return self._recover_or_cleanup_start(record, exc)
+
+        if current.state in {"failed", "stopped"}:
+            return False, f"Keeper entered terminal state: {current.state}"
+        if wait_for_ready:
+            return self._wait_for_start_ready(current)
+        return True, f"Accepted run {run_id}; starting with keeper PID {keeper_pid}"
+
+    def _wait_for_start_ready(self, record):
+        try:
+            response = self.client.wait_until_ready(record.run_id)
+        except Exception as exc:
+            return self._recover_or_cleanup_start(record, exc)
 
         root_pid = int(response.get("root_pid") or 0)
-        return True, f"Started run {run_id} with PID {root_pid}"
+        return True, f"Started run {record.run_id} with PID {root_pid}"
+
+    def _recover_or_cleanup_start(self, record, error):
+        current = self.registry.load(record.run_id) or record
+        if record.keeper_pid > 0 and record.keeper_created_at > 0:
+            current.keeper_pid = record.keeper_pid
+            current.keeper_created_at = record.keeper_created_at
+        keeper_alive, root_alive = self._record_processes_alive(current)
+
+        if keeper_alive:
+            response = None
+            try:
+                response = self.client.status(current.run_id, timeout=0.5)
+            except (ConnectionError, TimeoutError):
+                pass
+
+            if (
+                response is not None
+                and response.get("ok")
+                and self._status_identity_matches(current, response)
+            ):
+                state = str(response.get("state") or "")
+                root_pid = int(response.get("root_pid") or 0)
+                root_created_at = float(response.get("root_created_at") or 0.0)
+                tree_alive = bool(response.get("tree_alive", False))
+                if root_pid > 0 and root_created_at > 0:
+                    current.root_pid = root_pid
+                    current.root_created_at = root_created_at
+                    self.registry.update(
+                        current.run_id,
+                        keeper_pid=current.keeper_pid,
+                        keeper_created_at=current.keeper_created_at,
+                        root_pid=root_pid,
+                        root_created_at=root_created_at,
+                    )
+                if (
+                    state == "running"
+                    and tree_alive
+                    and process_matches(root_pid, root_created_at)
+                ):
+                    self.registry.update(
+                        current.run_id,
+                        state="running",
+                        keeper_pid=current.keeper_pid,
+                        keeper_created_at=current.keeper_created_at,
+                        root_pid=root_pid,
+                        root_created_at=root_created_at,
+                        exit_code=response.get("exit_code"),
+                    )
+                    return True, f"Started run {current.run_id} with PID {root_pid}"
+                if state in {"stopped", "failed"} and not tree_alive:
+                    if self._wait_for_verified_exit(current, timeout=2.0):
+                        return False, f"Keeper failed to start: {error}"
+
+            stop_response = None
+            try:
+                stop_response = self.client.stop(current.run_id, timeout=1.0)
+            except (ConnectionError, TimeoutError):
+                pass
+            if stop_response and stop_response.get("ok"):
+                timeout = current.close_timeout + 5.0
+                if self._wait_for_verified_exit(current, timeout=timeout):
+                    self.registry.update(
+                        current.run_id,
+                        state="failed",
+                        keeper_pid=current.keeper_pid,
+                        keeper_created_at=current.keeper_created_at,
+                    )
+                    return False, f"Keeper failed to start: {error}"
+
+            latest = self.registry.load(current.run_id) or current
+            keeper_alive, root_alive = self._record_processes_alive(latest)
+            if not keeper_alive and not root_alive:
+                self.registry.update(
+                    latest.run_id,
+                    state="failed",
+                    keeper_pid=current.keeper_pid,
+                    keeper_created_at=current.keeper_created_at,
+                )
+                return False, f"Keeper failed to start: {error}"
+            self.registry.update(
+                latest.run_id,
+                state="orphaned",
+                keeper_pid=current.keeper_pid,
+                keeper_created_at=current.keeper_created_at,
+            )
+            return False, (
+                f"Keeper readiness failed and cleanup could not be verified: {error}"
+            )
+
+        target_state = "orphaned" if root_alive else "failed"
+        self.registry.update(
+            current.run_id,
+            state=target_state,
+            keeper_pid=current.keeper_pid,
+            keeper_created_at=current.keeper_created_at,
+        )
+        if target_state == "orphaned":
+            return False, (
+                f"Keeper failed and a managed process may still be alive: {error}"
+            )
+        return False, f"Keeper failed to start: {error}"
+
+    def _wait_for_verified_exit(self, record, timeout):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            current = self.registry.load(record.run_id) or record
+            keeper_alive, root_alive = self._record_processes_alive(current)
+            if not keeper_alive and not root_alive:
+                return True
+            time.sleep(0.05)
+        current = self.registry.load(record.run_id) or record
+        return not any(self._record_processes_alive(current))
+
+    @staticmethod
+    def _record_processes_alive(record):
+        return (
+            process_matches(record.keeper_pid, record.keeper_created_at),
+            process_matches(record.root_pid, record.root_created_at),
+        )
 
     def stop(self, app_name):
         self.reconcile(app_name)
@@ -113,21 +243,24 @@ class SubprocessSessionManager(BaseSessionManager):
         for record in requested:
             deadline = time.monotonic() + record.close_timeout + 5.0
             while time.monotonic() < deadline:
-                current = self.registry.load(record.run_id)
+                current = self.registry.load(record.run_id) or record
                 keeper_alive = process_matches(
-                    record.keeper_pid, record.keeper_created_at
+                    current.keeper_pid, current.keeper_created_at
                 )
-                root_alive = process_matches(record.root_pid, record.root_created_at)
+                root_alive = process_matches(
+                    current.root_pid, current.root_created_at
+                )
                 if not keeper_alive and not root_alive:
-                    if current is not None and current.state != "stopped":
+                    if current.state != "stopped":
                         self.registry.update(record.run_id, state="stopped")
                     break
                 time.sleep(0.05)
             else:
+                current = self.registry.load(record.run_id) or record
                 alive = []
-                if process_matches(record.keeper_pid, record.keeper_created_at):
+                if process_matches(current.keeper_pid, current.keeper_created_at):
                     alive.append("keeper")
-                if process_matches(record.root_pid, record.root_created_at):
+                if process_matches(current.root_pid, current.root_created_at):
                     alive.append("root")
                 failures.append(
                     f"Run {record.run_id} did not stop before timeout"
@@ -143,7 +276,8 @@ class SubprocessSessionManager(BaseSessionManager):
         return bool(self._active_records(app_name))
 
     def get_info(self, app_name):
-        app_records = self._records_for(app_name)
+        self.client.reap_finished()
+        app_records = self._refresh_dead_active_records(app_name)
         records = [record for record in app_records if record.state in ACTIVE_STATES]
         if not records:
             orphaned = [record for record in app_records if record.state == "orphaned"]
@@ -271,9 +405,27 @@ class SubprocessSessionManager(BaseSessionManager):
         )
         return updated if updated is not None else record
 
+    def _refresh_dead_active_records(self, app_name):
+        refreshed = []
+        for record in self._records_for(app_name):
+            if record.state not in ACTIVE_STATES:
+                refreshed.append(record)
+                continue
+            keeper_alive, root_alive = self._record_processes_alive(record)
+            if keeper_alive:
+                refreshed.append(record)
+                continue
+            target_state = "orphaned" if root_alive else "stopped"
+            refreshed.append(self._update_if_changed(record, state=target_state))
+        return refreshed
+
     def _active_records(self, app_name):
         self.client.reap_finished()
-        return self._records_for(app_name, states=ACTIVE_STATES)
+        return [
+            record
+            for record in self._refresh_dead_active_records(app_name)
+            if record.state in ACTIVE_STATES
+        ]
 
     def _records_for(self, app_name, states=None):
         candidates = {str(app_name), slugify_app_id(str(app_name))}

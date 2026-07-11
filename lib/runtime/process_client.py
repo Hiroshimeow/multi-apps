@@ -63,7 +63,17 @@ class ProcessClient:
         while created_at is None and time.monotonic() < deadline and process.poll() is None:
             time.sleep(0.02)
             created_at = get_process_created_at(process.pid)
-        return process.pid, float(created_at or 0.0)
+        if created_at is None:
+            self._keepers.pop(run_id, None)
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2.0)
+            raise RuntimeError(f"Could not verify keeper identity for run {run_id}")
+        return process.pid, float(created_at)
 
     def wait_until_ready(self, run_id: str, timeout: float = 8.0) -> dict[str, Any]:
         deadline = time.monotonic() + timeout

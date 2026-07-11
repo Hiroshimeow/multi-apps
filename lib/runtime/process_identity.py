@@ -57,6 +57,9 @@ def _get_windows_process_created_at(pid: int) -> float | None:
             ctypes.byref(user_time),
         ):
             return None
+        exit_ticks = (exit_time.dwHighDateTime << 32) | exit_time.dwLowDateTime
+        if exit_ticks != 0:
+            return None
         ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
         return ticks / 10_000_000 - 11_644_473_600
     finally:
