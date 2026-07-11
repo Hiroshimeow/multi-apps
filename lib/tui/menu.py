@@ -61,7 +61,7 @@ class InteractiveMenu:
         table.add_column("", justify="center", width=3) # Cursor column
         table.add_column("Sel", justify="center", width=3)
         table.add_column("App Name", style="bold white")
-        table.add_column("Type", style="magenta")
+        table.add_column("Command", style="magenta", max_width=40)
         table.add_column("Status", justify="center")
         table.add_column("Session", style="blue")
         
@@ -92,7 +92,7 @@ class InteractiveMenu:
                 cursor, 
                 f"[{sel_style}]{selected}[/]", 
                 name, 
-                app['type'], 
+                app['command'],
                 status_display, 
                 session_name,
                 style=style

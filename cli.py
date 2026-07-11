@@ -28,7 +28,7 @@ def main():
     # 2. CLI Mode
     if args.command == "list":
         for app in controller.list_apps():
-            print(f"- {app['name']} ({app['type']})")
+            print(f"- {app['name']}: {app['command']}")
         return
 
     if args.command == "status":
