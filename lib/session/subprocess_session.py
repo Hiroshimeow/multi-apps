@@ -14,6 +14,7 @@ from ..runtime.registry import RuntimeRegistry
 
 ACTIVE_STATES = frozenset({"starting", "running", "stopping"})
 STARTING_IPC_GRACE_SECONDS = 10.0
+STARTING_CLOCK_SKEW_TOLERANCE_SECONDS = 2.0
 STARTING_STOP_RETRY_TIMEOUT = 3.0
 STOP_IPC_RETRY_INTERVAL = 0.05
 
@@ -451,6 +452,13 @@ class SubprocessSessionManager(BaseSessionManager):
     def _refresh_dead_active_records(self, app_name):
         refreshed = []
         for record in self._records_for(app_name):
+            if record.state == "orphaned":
+                keeper_alive, root_alive = self._record_processes_alive(record)
+                if keeper_alive or root_alive:
+                    refreshed.append(record)
+                else:
+                    refreshed.append(self._update_if_changed(record, state="stopped"))
+                continue
             if record.state not in ACTIVE_STATES:
                 refreshed.append(record)
                 continue
@@ -500,10 +508,10 @@ class SubprocessSessionManager(BaseSessionManager):
             return float("inf")
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
-        return max(
-            0.0,
-            (datetime.now(timezone.utc) - created_at).total_seconds(),
-        )
+        age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+        if age_seconds < -STARTING_CLOCK_SKEW_TOLERANCE_SECONDS:
+            return float("inf")
+        return max(0.0, age_seconds)
 
     @staticmethod
     def _parse_timestamp(value):

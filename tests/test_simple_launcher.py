@@ -465,6 +465,80 @@ class SubprocessSessionTests(unittest.TestCase):
             )
             session.registry.delete(record.run_id)
 
+    def test_small_future_clock_skew_remains_within_starting_grace(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            current_created_at = get_process_created_at(os.getpid())
+            self.assertIsNotNone(current_created_at)
+            record = RunRecord.create(
+                app_id="small-clock-skew",
+                path=str(root),
+                command="unused",
+                run_id="small-clock-skew-run",
+            )
+            record.keeper_pid = os.getpid()
+            record.keeper_created_at = current_created_at
+            record.state = "starting"
+            record.created_at = (
+                datetime.now(timezone.utc) + timedelta(seconds=1)
+            ).isoformat()
+            session.registry.save(record)
+
+            with patch.object(
+                session.client,
+                "status",
+                side_effect=ConnectionError("listener not ready"),
+            ):
+                reconciled = session.reconcile("small-clock-skew")[0]
+
+            self.assertEqual(reconciled.state, "starting")
+            self.assertLessEqual(session._record_age_seconds(record), 10.0)
+            session.registry.delete(record.run_id)
+
+    def test_materially_future_starting_becomes_orphaned(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            current_created_at = get_process_created_at(os.getpid())
+            self.assertIsNotNone(current_created_at)
+            record = RunRecord.create(
+                app_id="future-starting",
+                path=str(root),
+                command="unused",
+                run_id="future-starting-run",
+            )
+            record.keeper_pid = os.getpid()
+            record.keeper_created_at = current_created_at
+            record.state = "starting"
+            record.created_at = (
+                datetime.now(timezone.utc) + timedelta(hours=2)
+            ).isoformat()
+            session.registry.save(record)
+
+            with patch.object(
+                session.client,
+                "status",
+                side_effect=ConnectionError("IPC unavailable"),
+            ):
+                reconciled = session.reconcile("future-starting")[0]
+
+            self.assertEqual(session._record_age_seconds(record), float("inf"))
+            self.assertEqual(reconciled.state, "orphaned")
+            self.assertEqual(
+                session.get_info("future-starting")["status"],
+                "ORPHANED",
+            )
+            self.assertEqual(
+                session.registry.load(record.run_id).state,
+                "orphaned",
+            )
+            session.registry.delete(record.run_id)
+
     def test_stale_starting_becomes_orphaned_on_reconcile_and_get_info(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -614,6 +688,86 @@ class SubprocessSessionTests(unittest.TestCase):
                 "orphaned",
             )
             session.registry.delete(record.run_id)
+
+    def test_orphaned_record_stays_orphaned_until_identities_die(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = SubprocessSessionManager(
+                {"log_dir": str(root / "logs"), "_config_dir": str(root)}
+            )
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            keeper = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+            deadline = time.monotonic() + 2.0
+            keeper_created_at = get_process_created_at(keeper.pid)
+            while keeper_created_at is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+                keeper_created_at = get_process_created_at(keeper.pid)
+            self.assertIsNotNone(keeper_created_at)
+
+            record = RunRecord.create(
+                app_id="orphan-refresh",
+                path=str(root),
+                command="unused",
+                run_id="orphan-refresh-run",
+            )
+            record.keeper_pid = keeper.pid
+            record.keeper_created_at = keeper_created_at
+            record.state = "orphaned"
+            session.registry.save(record)
+
+            try:
+                with patch.object(
+                    session.client,
+                    "status",
+                    side_effect=AssertionError("orphan refresh must not use IPC"),
+                ):
+                    live_info = session.get_info("orphan-refresh")
+                self.assertEqual(live_info["status"], "ORPHANED")
+                self.assertEqual(
+                    session.registry.load(record.run_id).state,
+                    "orphaned",
+                )
+
+                keeper.terminate()
+                keeper.wait(timeout=3.0)
+                dead_info = session.get_info("orphan-refresh")
+                self.assertEqual(dead_info["status"], "STOPPED")
+                self.assertEqual(
+                    session.registry.load(record.run_id).state,
+                    "stopped",
+                )
+
+                current_created_at = get_process_created_at(os.getpid())
+                self.assertIsNotNone(current_created_at)
+                app = {
+                    "id": "orphan-refresh",
+                    "name": "Orphan Refresh",
+                    "path": str(root),
+                    "command": "unused",
+                    "args": [],
+                    "multi_run": False,
+                }
+                with patch.object(
+                    session.client,
+                    "launch_keeper",
+                    return_value=(os.getpid(), current_created_at),
+                ):
+                    success, message = session.start(CommandRunner(app, {}))
+                self.assertTrue(success, message)
+                self.assertIn("Accepted run", message)
+                self.assertEqual(len(session.registry.list_records()), 2)
+            finally:
+                if keeper.poll() is None:
+                    keeper.kill()
+                    keeper.wait(timeout=3.0)
+                for stored in session.registry.list_records():
+                    session.registry.delete(stored.run_id)
 
     def test_controller_and_gui_use_explicit_readiness_semantics(self):
         with tempfile.TemporaryDirectory() as temp_dir:
