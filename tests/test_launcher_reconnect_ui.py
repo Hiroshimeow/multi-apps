@@ -230,6 +230,55 @@ class RecoveredUiStateTests(unittest.TestCase):
 
 
 class LauncherLifecycleTests(unittest.TestCase):
+    class FakeTimer:
+        def __init__(self, name, active, events, remaining_ms=-1):
+            self.name = name
+            self.active = active
+            self.events = events
+            self.remaining_ms = remaining_ms
+
+        def isActive(self):
+            return self.active
+
+        def remainingTime(self):
+            return self.remaining_ms if self.active else -1
+
+        def stop(self):
+            self.events.append(f"{self.name}:stop")
+            self.active = False
+
+        def start(self, *args):
+            self.events.append(f"{self.name}:start:{args}")
+            self.active = True
+            if args:
+                self.remaining_ms = args[0]
+
+    class FakeLock:
+        def __init__(self, events):
+            self.events = events
+            self.acquired = True
+
+        def release(self):
+            self.events.append("lock:release")
+            self.acquired = False
+
+        def acquire(self):
+            self.events.append("lock:acquire")
+            self.acquired = True
+            return True
+
+    @staticmethod
+    def _bind_timer_activity_methods(tray):
+        tray._capture_launcher_ui_activity = lambda: (
+            SystemTrayApp._capture_launcher_ui_activity(tray)
+        )
+        tray._stop_launcher_ui_activity = lambda: (
+            SystemTrayApp._stop_launcher_ui_activity(tray)
+        )
+        tray._restore_launcher_ui_activity = lambda snapshot: (
+            SystemTrayApp._restore_launcher_ui_activity(snapshot)
+        )
+
     def test_restart_releases_lock_before_spawn_and_never_stops_apps(self):
         events = []
         controller = MagicMock()
@@ -254,20 +303,19 @@ class LauncherLifecycleTests(unittest.TestCase):
         controller.stop_all.assert_not_called()
         tray.restart_action.setEnabled.assert_called_once_with(False)
 
-    def test_restart_spawn_failure_reacquires_lock_and_keeps_launcher_running(self):
+    def test_failed_restart_after_completed_auto_start_restores_only_active_ui_timers(self):
         events = []
         controller = MagicMock()
-        lock = SimpleNamespace(
-            acquired=True,
-            release=lambda: events.append("release"),
-            acquire=lambda: events.append("acquire") or True,
-        )
-        timer = MagicMock()
+        auto_start = self.FakeTimer("auto-start", False, events)
+        status = self.FakeTimer("status", True, events)
+        hover = self.FakeTimer("hover", True, events)
+        lock = self.FakeLock(events)
+        menu = SimpleNamespace(findChildren=lambda timer_type: [status, hover])
         tray = SimpleNamespace(
             _restart_requested=False,
             restart_action=MagicMock(),
-            auto_start_timer=timer,
-            _stop_launcher_ui_activity=lambda: events.append("stop-ui"),
+            auto_start_timer=auto_start,
+            menu=menu,
             instance_lock=lock,
             _spawn_replacement_launcher=MagicMock(
                 side_effect=OSError("spawn failed")
@@ -275,17 +323,85 @@ class LauncherLifecycleTests(unittest.TestCase):
             showMessage=MagicMock(),
             controller=controller,
         )
+        self._bind_timer_activity_methods(tray)
 
         with patch("multi.QApplication.quit") as quit_app:
             SystemTrayApp.restart_app(tray)
 
-        self.assertEqual(events, ["stop-ui", "release", "acquire"])
+        self.assertEqual(
+            events,
+            [
+                "auto-start:stop",
+                "status:stop",
+                "hover:stop",
+                "lock:release",
+                "lock:acquire",
+                "status:start:()",
+                "hover:start:()",
+            ],
+        )
+        self.assertFalse(auto_start.active)
+        self.assertTrue(status.active)
+        self.assertTrue(hover.active)
+        self.assertTrue(lock.acquired)
         self.assertFalse(tray._restart_requested)
         tray.restart_action.setEnabled.assert_any_call(False)
         tray.restart_action.setEnabled.assert_any_call(True)
-        timer.start.assert_called_once_with(1000)
         quit_app.assert_not_called()
+        controller.start_app.assert_not_called()
+        controller.stop_app.assert_not_called()
         controller.stop_all.assert_not_called()
+        controller.reconcile.assert_not_called()
+
+    def test_failed_restart_restores_pending_auto_start_remaining_delay(self):
+        events = []
+        controller = MagicMock()
+        auto_start = self.FakeTimer("auto-start", True, events, remaining_ms=437)
+        status = self.FakeTimer("status", True, events)
+        hidden_hover = self.FakeTimer("hover", False, events)
+        lock = self.FakeLock(events)
+        menu = SimpleNamespace(findChildren=lambda timer_type: [status, hidden_hover])
+        tray = SimpleNamespace(
+            _restart_requested=False,
+            restart_action=MagicMock(),
+            auto_start_timer=auto_start,
+            menu=menu,
+            instance_lock=lock,
+            _spawn_replacement_launcher=MagicMock(
+                side_effect=OSError("spawn failed")
+            ),
+            showMessage=MagicMock(),
+            controller=controller,
+        )
+        self._bind_timer_activity_methods(tray)
+
+        with patch("multi.QApplication.quit") as quit_app:
+            SystemTrayApp.restart_app(tray)
+
+        self.assertEqual(
+            events,
+            [
+                "auto-start:stop",
+                "status:stop",
+                "hover:stop",
+                "lock:release",
+                "lock:acquire",
+                "auto-start:start:(437,)",
+                "status:start:()",
+            ],
+        )
+        self.assertTrue(auto_start.active)
+        self.assertEqual(auto_start.remaining_ms, 437)
+        self.assertTrue(status.active)
+        self.assertFalse(hidden_hover.active)
+        self.assertTrue(lock.acquired)
+        self.assertFalse(tray._restart_requested)
+        tray.restart_action.setEnabled.assert_any_call(True)
+        quit_app.assert_not_called()
+        controller.start_app.assert_not_called()
+        controller.stop_app.assert_not_called()
+        controller.stop_all.assert_not_called()
+        controller.reconcile.assert_not_called()
 
     @unittest.skipUnless(os.name == "nt", "Windows launcher process flags")
     def test_replacement_launcher_is_detached_from_console_and_stdio(self):

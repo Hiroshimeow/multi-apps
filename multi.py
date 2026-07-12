@@ -522,12 +522,38 @@ class SystemTrayApp(QSystemTrayIcon):
         if self.controller:
             self.controller.stop_all()
 
-    def _stop_launcher_ui_activity(self):
+    def _capture_launcher_ui_activity(self):
+        snapshot = {"auto_start": None, "menu_timers": []}
         if hasattr(self, "auto_start_timer"):
-            self.auto_start_timer.stop()
+            timer = self.auto_start_timer
+            active = timer.isActive()
+            remaining_ms = timer.remainingTime() if active else -1
+            snapshot["auto_start"] = (timer, active, remaining_ms)
         if hasattr(self, "menu"):
-            for timer in self.menu.findChildren(QTimer):
-                timer.stop()
+            snapshot["menu_timers"] = [
+                (timer, timer.isActive()) for timer in self.menu.findChildren(QTimer)
+            ]
+        return snapshot
+
+    def _stop_launcher_ui_activity(self):
+        snapshot = self._capture_launcher_ui_activity()
+        auto_start = snapshot["auto_start"]
+        if auto_start is not None:
+            auto_start[0].stop()
+        for timer, _was_active in snapshot["menu_timers"]:
+            timer.stop()
+        return snapshot
+
+    @staticmethod
+    def _restore_launcher_ui_activity(snapshot):
+        auto_start = snapshot.get("auto_start")
+        if auto_start is not None:
+            timer, was_active, remaining_ms = auto_start
+            if was_active:
+                timer.start(max(1, remaining_ms))
+        for timer, was_active in snapshot.get("menu_timers", []):
+            if was_active:
+                timer.start()
 
     def _spawn_replacement_launcher(self):
         project_root = os.path.dirname(os.path.abspath(__file__))
@@ -548,7 +574,7 @@ class SystemTrayApp(QSystemTrayIcon):
             return
         self._restart_requested = True
         self.restart_action.setEnabled(False)
-        self._stop_launcher_ui_activity()
+        ui_activity = self._stop_launcher_ui_activity()
 
         released_lock = bool(self.instance_lock and self.instance_lock.acquired)
         if released_lock:
@@ -569,7 +595,7 @@ class SystemTrayApp(QSystemTrayIcon):
                 return
             self._restart_requested = False
             self.restart_action.setEnabled(True)
-            self.auto_start_timer.start(1000)
+            self._restore_launcher_ui_activity(ui_activity)
             self.showMessage(
                 "Restart failed",
                 str(exc),
