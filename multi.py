@@ -213,16 +213,24 @@ class AppManager:
         instances = int(status_info.get("instances") or 0)
 
         if status == "RUNNING":
-            text = status_info.get("uptime") or "0d 0h 0m 0s"
+            uptime = status_info.get("uptime")
+            active_instances = max(1, instances)
             instance_text = (
-                f"{instances} active instances"
-                if instances != 1
+                f"{active_instances} active instances"
+                if active_instances != 1
                 else "1 active instance"
             )
+            tooltip_lines = ["Running"]
+            if uptime:
+                text = uptime
+            else:
+                text = "—"
+                tooltip_lines.append("Elapsed time unavailable")
+            tooltip_lines.append(instance_text)
             return {
                 "text": text,
                 "color": "green",
-                "tooltip": f"Running\n{instance_text}",
+                "tooltip": "\n".join(tooltip_lines),
             }
         if status == "STARTING":
             text = "Starting" if instances <= 1 else f"Starting ({instances} instances)"
@@ -235,8 +243,12 @@ class AppManager:
             return {"text": text, "color": "#b00020", "tooltip": text}
 
         last_used_time = status_info.get("last_used_time")
-        text = last_used_time or "Never"
-        tooltip = f"Last used: {last_used_time}" if last_used_time else "Never used"
+        text = last_used_time or "—"
+        tooltip = (
+            f"Last used: {last_used_time}"
+            if last_used_time
+            else "Last-used time unavailable"
+        )
         return {"text": text, "color": "#c62828", "tooltip": tooltip}
 
     def get_status_text(self, status_info=None):

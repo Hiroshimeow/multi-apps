@@ -287,6 +287,17 @@ class RecoveredUiStateTests(unittest.TestCase):
         self.assertEqual(multiple["text"], "0d 0h 5m 6s")
         self.assertIn("2 active instances", multiple["tooltip"])
 
+    def test_tmux_running_without_elapsed_metadata_uses_honest_fallback(self):
+        status_info = {"status": "RUNNING", "session": "app-demo"}
+        presentation = self._manager(status_info).get_status_presentation(status_info)
+
+        self.assertEqual(presentation["text"], "—")
+        self.assertEqual(presentation["color"], "green")
+        self.assertIn("Elapsed time unavailable", presentation["tooltip"])
+        self.assertIn("1 active instance", presentation["tooltip"])
+        self.assertNotIn("0d 0h 0m 0s", presentation["text"])
+        self.assertNotIn("0 active instances", presentation["tooltip"])
+
     def test_stopped_primary_text_is_terminal_last_used_red_not_uptime(self):
         status_info = {
             "status": "STOPPED",
@@ -303,17 +314,20 @@ class RecoveredUiStateTests(unittest.TestCase):
         )
         self.assertNotIn(status_info["uptime"], presentation["text"])
 
-    def test_stopped_without_history_uses_never_and_remains_start_eligible(self):
-        status_info = {"status": "STOPPED", "instances": 0}
+    def test_tmux_stopped_without_history_uses_honest_fallback_and_remains_start_eligible(self):
+        status_info = {"status": "STOPPED"}
         manager = self._manager(status_info)
         presentation = manager.get_status_presentation(status_info)
-        self.assertEqual(presentation["text"], "Never")
+
+        self.assertEqual(presentation["text"], "—")
         self.assertEqual(presentation["color"], "#c62828")
+        self.assertEqual(presentation["tooltip"], "Last-used time unavailable")
+        self.assertNotEqual(presentation["text"], "Never")
 
         widget = self._update_widget(manager)
         widget.btn_stop.setEnabled.assert_called_once_with(False)
         widget.btn_start.setEnabled.assert_called_once_with(True)
-        widget.lbl_status.setText.assert_called_once_with("Never")
+        widget.lbl_status.setText.assert_called_once_with("—")
 
     def test_transitional_state_text_and_colors_are_preserved(self):
         cases = [
