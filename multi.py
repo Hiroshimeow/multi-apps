@@ -114,6 +114,7 @@ class AppManager:
         self.controller = controller
         self.name = app_name
         self.app_config = self.controller.config_manager.get_app(app_name)
+        self.startup_auto_start_suppressed = False
 
     def can_start_manually(self):
         if self.app_config.get("multi_run", False):
@@ -127,6 +128,9 @@ class AppManager:
             if not self.can_start_manually():
                 return False, "Start is blocked by an active or orphaned run"
             if self.app_config.get("args_edit", False):
+                # Dequeue this app from the one-shot startup auto-start before
+                # entering QDialog.exec(), which runs a nested Qt event loop.
+                self.startup_auto_start_suppressed = True
                 dialog = ArgsEditDialog(self.app_config, parent)
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return False, "Cancelled"
@@ -495,6 +499,8 @@ class SystemTrayApp(QSystemTrayIcon):
         print("Auto-starting apps with auto_start=true...")
         self.controller.reconcile()
         for mgr in self.managers:
+            if getattr(mgr, "startup_auto_start_suppressed", False):
+                continue
             if self.controller.should_auto_start(mgr.name):
                 print(f"  -> Starting: {mgr.name}")
                 mgr.launch()

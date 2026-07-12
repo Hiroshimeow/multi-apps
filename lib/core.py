@@ -47,12 +47,6 @@ class AppController:
             return False
         return self.get_app_status(app_name).get("status") == "STOPPED"
 
-    def preview_app_command(self, app_name, args_override=None):
-        app = self.config_manager.get_app(app_name)
-        if not app:
-            return ""
-        return self._get_runner(app, args_override=args_override).build_command()
-
     def start_app(self, app_name, *, wait_for_ready=True, args_override=None):
         app = self.config_manager.get_app(app_name)
         if not app:

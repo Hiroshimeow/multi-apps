@@ -9,16 +9,23 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import yaml
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox
 
 from lib.core import AppController
 from lib.runners.command_runner import CommandRunner
-from multi import ArgsEditDialog, ArgsEditModel, AppControlWidget, AppManager
+from multi import (
+    ArgsEditDialog,
+    ArgsEditModel,
+    AppControlWidget,
+    AppManager,
+    SystemTrayApp,
+)
 
 
 class ArgsEditModelTests(unittest.TestCase):
@@ -152,6 +159,7 @@ class ArgsEditCallerTests(unittest.TestCase):
             success, message = manager.launch(manual=True)
 
         self.assertTrue(success, message)
+        self.assertTrue(manager.startup_auto_start_suppressed)
         dialog_class.assert_called_once_with(manager.app_config, None)
         controller.start_app.assert_called_once_with(
             "Demo",
@@ -166,6 +174,7 @@ class ArgsEditCallerTests(unittest.TestCase):
             success, message = manager.launch()
 
         self.assertTrue(success, message)
+        self.assertFalse(manager.startup_auto_start_suppressed)
         dialog_class.assert_not_called()
         controller.start_app.assert_called_once_with(
             "Demo",
@@ -249,6 +258,7 @@ class ArgsEditCallerTests(unittest.TestCase):
 
             self.assertFalse(success)
             self.assertEqual(message, "Cancelled")
+            self.assertTrue(manager.startup_auto_start_suppressed)
             self.assertEqual(controller.session_manager.registry.list_records(), [])
             self.assertEqual(manager.app_config["args"], original_args)
             self.assertEqual(config_path.read_bytes(), original_bytes)
@@ -276,6 +286,185 @@ class ArgsEditCallerTests(unittest.TestCase):
         self.assertEqual(
             runner.build_command(),
             'python demo.py --yaml "original" && echo yaml',
+        )
+
+
+class ArgsEditNestedEventTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _command(self):
+        parts = [
+            sys.executable,
+            "-c",
+            (
+                "import sys,time; "
+                "print('|'.join(sys.argv[1:]), flush=True); "
+                "time.sleep(10)"
+            ),
+        ]
+        return subprocess.list2cmdline(parts) if os.name == "nt" else shlex.join(parts)
+
+    def _controller_and_managers(self, root, *, multi_run=False, include_other=False):
+        apps = [
+            {
+                "id": "race",
+                "name": "Race",
+                "path": str(root),
+                "command": self._command(),
+                "args": ["--yaml"],
+                "enabled": True,
+                "auto_start": True,
+                "args_edit": True,
+                "multi_run": multi_run,
+                "close_timeout": 0.5,
+            }
+        ]
+        if include_other:
+            apps.append(
+                {
+                    "id": "other",
+                    "name": "Other",
+                    "path": str(root),
+                    "command": self._command(),
+                    "args": ["--other-yaml"],
+                    "enabled": True,
+                    "auto_start": True,
+                    "args_edit": False,
+                    "multi_run": False,
+                    "close_timeout": 0.5,
+                }
+            )
+        config_path = root / "setting.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "global": {"session": "subprocess", "log_dir": "./logs"},
+                    "apps": apps,
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        controller = AppController(str(config_path))
+        managers = [AppManager(controller, app["name"]) for app in apps]
+        tray = SimpleNamespace(controller=controller, managers=managers)
+        return controller, managers, tray
+
+    def _cleanup(self, controller, app_names):
+        for app_name in app_names:
+            for _attempt in range(3):
+                if controller.get_app_status(app_name)["status"] == "STOPPED":
+                    break
+                if controller.stop_app(app_name):
+                    break
+                time.sleep(0.1)
+        client = controller.session_manager.client
+        deadline = time.monotonic() + 3.0
+        while client._keepers and time.monotonic() < deadline:
+            client.reap_finished()
+            time.sleep(0.02)
+        self.assertFalse(client._keepers)
+
+    def _run_nested_case(self, *, accept, multi_run=False, include_other=False):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            controller, managers, tray = self._controller_and_managers(
+                root,
+                multi_run=multi_run,
+                include_other=include_other,
+            )
+            selected = managers[0]
+            edited = '--edited "two words"'
+            app_names = [manager.name for manager in managers]
+
+            class TimedDialog(ArgsEditDialog):
+                def __init__(self, app_config, parent=None):
+                    super().__init__(app_config, parent)
+                    self.args_input.setText(edited)
+                    QTimer.singleShot(
+                        0,
+                        lambda: SystemTrayApp.auto_start_apps(tray),
+                    )
+                    QTimer.singleShot(50, self.accept if accept else self.reject)
+
+            try:
+                before_count = len(controller.session_manager.registry.list_records())
+                with patch("multi.ArgsEditDialog", TimedDialog), patch.object(
+                    controller,
+                    "start_app",
+                    wraps=controller.start_app,
+                ) as start_app:
+                    result = selected.launch(manual=True)
+                QApplication.processEvents()
+                records = controller.session_manager.registry.list_records()
+                calls = list(start_app.call_args_list)
+                suppressed = selected.startup_auto_start_suppressed
+            finally:
+                self._cleanup(controller, app_names)
+
+            return {
+                "before_count": before_count,
+                "result": result,
+                "records": records,
+                "calls": calls,
+                "suppressed": suppressed,
+            }
+
+    def test_pending_auto_start_cancel_creates_no_run_in_nested_event_loop(self):
+        outcome = self._run_nested_case(accept=False)
+
+        self.assertEqual(outcome["result"], (False, "Cancelled"))
+        self.assertEqual(outcome["before_count"], 0)
+        self.assertEqual(outcome["records"], [])
+        self.assertEqual(outcome["calls"], [])
+        self.assertTrue(outcome["suppressed"])
+
+    def test_pending_auto_start_accept_non_multi_creates_one_edited_run(self):
+        outcome = self._run_nested_case(accept=True, multi_run=False)
+
+        self.assertEqual(outcome["result"], (True, "Started"))
+        self.assertEqual(len(outcome["records"]), 1)
+        self.assertEqual(outcome["records"][0].app_id, "race")
+        self.assertEqual(outcome["records"][0].args, ['--edited "two words"'])
+        self.assertEqual(len(outcome["calls"]), 1)
+        self.assertEqual(outcome["calls"][0].args[0], "Race")
+        self.assertEqual(
+            outcome["calls"][0].kwargs,
+            {
+                "wait_for_ready": False,
+                "args_override": ['--edited "two words"'],
+            },
+        )
+
+    def test_pending_auto_start_accept_multi_run_has_no_extra_yaml_run(self):
+        outcome = self._run_nested_case(accept=True, multi_run=True)
+
+        race_records = [
+            record for record in outcome["records"] if record.app_id == "race"
+        ]
+        self.assertEqual(outcome["result"], (True, "Started"))
+        self.assertEqual(len(race_records), 1)
+        self.assertEqual(race_records[0].args, ['--edited "two words"'])
+        self.assertEqual(len(outcome["calls"]), 1)
+        self.assertIn("args_override", outcome["calls"][0].kwargs)
+
+    def test_pending_editor_does_not_block_other_auto_start_app(self):
+        outcome = self._run_nested_case(
+            accept=False,
+            include_other=True,
+        )
+
+        self.assertEqual(outcome["result"], (False, "Cancelled"))
+        self.assertEqual(len(outcome["records"]), 1)
+        self.assertEqual(outcome["records"][0].app_id, "other")
+        self.assertEqual(outcome["records"][0].args, ["--other-yaml"])
+        self.assertEqual(len(outcome["calls"]), 1)
+        self.assertEqual(outcome["calls"][0].args[0], "Other")
+        self.assertEqual(
+            outcome["calls"][0].kwargs,
+            {"wait_for_ready": False},
         )
 
 
@@ -347,9 +536,10 @@ class ArgsEditRuntimeTests(unittest.TestCase):
                     item.run_id
                     for item in controller.session_manager.registry.list_records()
                 }
-                preview = controller.preview_app_command(
-                    "Args Runtime",
-                    args_override=[override],
+                app_config = controller.config_manager.get_app("Args Runtime")
+                preview = CommandRunner.build_command_text(
+                    app_config["command"],
+                    [override],
                 )
                 self.assertTrue(
                     controller.start_app(
