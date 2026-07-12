@@ -24,7 +24,6 @@ class ConfigLifecycleFieldTests(unittest.TestCase):
             app = ConfigManager(config_path).get_apps()[0]
 
             self.assertEqual(app["id"], "demo-app-worker")
-            self.assertFalse(app["close_ask"])
             self.assertFalse(app["args_edit"])
             self.assertEqual(app["close_timeout"], 5.0)
 
@@ -36,7 +35,6 @@ class ConfigLifecycleFieldTests(unittest.TestCase):
                 "  - id: '  Stable.ID_1  '\n"
                 "    name: Demo\n"
                 "    command: python demo.py\n"
-                "    close_ask: true\n"
                 "    args_edit: true\n"
                 "    close_timeout: 1.25\n",
             )
@@ -44,7 +42,6 @@ class ConfigLifecycleFieldTests(unittest.TestCase):
             app = ConfigManager(config_path).get_apps()[0]
 
             self.assertEqual(app["id"], "Stable.ID_1")
-            self.assertTrue(app["close_ask"])
             self.assertTrue(app["args_edit"])
             self.assertEqual(app["close_timeout"], 1.25)
 

@@ -124,7 +124,6 @@ class ConfigManager:
             "enabled": bool(raw_app.get("enabled", True)),
             "auto_start": bool(raw_app.get("auto_start", False)),
             "multi_run": bool(raw_app.get("multi_run", global_config["multi_run"])),
-            "close_ask": bool(raw_app.get("close_ask", False)),
             "args_edit": bool(raw_app.get("args_edit", False)),
             "close_timeout": close_timeout,
             "os": raw_app.get("os"),
