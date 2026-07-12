@@ -61,29 +61,39 @@ acquire single-instance lock
 
 ## Cấu hình
 
-Mỗi app bắt buộc có `name` và `command`. `path` là working directory, tương đương việc `cd` vào thư mục trước khi chạy command. Các phần tử trong `args` được nối nguyên văn vào cuối `command` bằng dấu cách.
+`setting.yaml.sample` trong repository khai báo **tường minh toàn bộ field được hỗ trợ** cho từng app, kể cả khi giá trị bằng default. `setting.yaml` là cấu hình riêng của từng máy và bị Git bỏ qua. Khi cài mới, copy sample thành `setting.yaml`; khi thêm app, copy một block hiện có và giữ đủ các field.
+
+Mỗi app bắt buộc có `name` và `command`. `path` là working directory, tương đương việc `cd` vào thư mục trước khi chạy command.
+
+Không có field `params`. Launcher không đọc `params`; mọi flag, option hoặc positional argument phải đặt trong `args`. Nên dùng dạng list. Mỗi phần tử được nối **nguyên văn** vào cuối `command` bằng một dấu cách. App không có tham số vẫn nên ghi rõ `args: []`.
 
 ```yaml
+global:
+  log_dir: "./logs"
+  session: "subprocess"
+  multi_run: false
+
 apps:
-  - id: auto-suggest
+  - id: "auto-suggest"
     name: "Auto Suggest"
     path: "E:/python_project/auto-suggest/"
     command: "uv run main.py"
     args:
       - "--repo E:/python_project"
+      - "--port 8000"
     enabled: true
     auto_start: true
     multi_run: false
     args_edit: false
-    close_timeout: 5
-    os: win11
+    close_timeout: 5.0
+    os: "win11"
 ```
 
 Lệnh thực tế:
 
 ```text
 cd E:/python_project/auto-suggest/
-uv run main.py --repo E:/python_project
+uv run main.py --repo E:/python_project --port 8000
 ```
 
 ### Các trường app
@@ -94,7 +104,7 @@ uv run main.py --repo E:/python_project
 | `name` | bắt buộc | Tên hiển thị và tên dùng bởi CLI. |
 | `path` | thư mục chứa file config | Working directory của command. |
 | `command` | bắt buộc | Câu lệnh chạy qua shell hệ thống. |
-| `args` | `[]` | Chuỗi hoặc danh sách fragment nối nguyên văn vào command. |
+| `args` | `[]` | Chuỗi hoặc danh sách fragment nối nguyên văn vào command. Dùng field này cho flag/option/positional argument; không có field `params`. |
 | `enabled` | `true` | Cho phép app xuất hiện và được điều khiển. |
 | `auto_start` | `false` | Tự Start một lần sau reconciliation nếu không có run active/orphaned. |
 | `multi_run` | giá trị global | Cho phép các thao tác Start chủ động tạo nhiều run. |
@@ -102,16 +112,30 @@ uv run main.py --repo E:/python_project
 | `close_timeout` | `5.0` giây | Thời gian graceful Stop trước khi force-close complete tree. Phải lớn hơn 0. |
 | `os` | mọi OS hỗ trợ | Lọc theo `win`, `windows`, `win10`, `win11`, `linux`, `ubuntu` hoặc `debian`. |
 
-Cấu hình toàn cục:
+### Các trường global
 
-```yaml
-global:
-  log_dir: "./logs"
-  session: "subprocess"  # hoặc "tmux" trên Linux
-  multi_run: false
-```
+| Trường | Giá trị khuyến nghị | Ý nghĩa |
+|---|---:|---|
+| `log_dir` | `"./logs"` | Thư mục log theo từng run; path tương đối tính từ thư mục chứa file YAML. |
+| `session` | `"subprocess"` | Backend chạy app. Dùng `"subprocess"` trên Windows/Linux; `"tmux"` chỉ có hiệu lực trên Linux. |
+| `multi_run` | `false` | Giá trị fallback cho app cũ không khai báo `multi_run`; file mẫu hiện khai báo lại field này ở từng app. |
 
 Các path tương đối được resolve từ thư mục chứa file config.
+
+### Cách viết `args`
+
+```yaml
+# Không có tham số
+args: []
+
+# Có nhiều flag/option
+args:
+  - "--port 8000"
+  - "--host 127.0.0.1"
+  - "input.txt"
+```
+
+Các phần tử không bị parse thành token lần nữa. Quote, pipe và shell operator được giữ nguyên, ví dụ `"--title \"Two words\""` hoặc `"&& echo done"`. Vì vậy cần viết đúng cú pháp mà shell đích sẽ nhận.
 
 ## Chỉnh args cho một run
 
@@ -150,6 +174,10 @@ command: "python prepare.py && uv run main.py"
 
 Trên Windows, command chạy qua `cmd.exe`. Trên Linux, command chạy qua shell do Python cung cấp.
 
+## Phạm vi tương thích
+
+Launcher phù hợp với phần lớn ứng dụng có thể khởi động bằng command shell: CLI, local server, Python/Node/UV/Conda command và executable GUI thông thường. Không thể cam kết cho mọi app: ứng dụng UWP/Store, service cần quyền đặc biệt, chương trình tự tách khỏi process tree, ứng dụng bắt buộc terminal tương tác hoặc launcher chống cheat có thể cần cấu hình và kiểm tra riêng.
+
 ## Runtime registry và log
 
 Runtime records nằm trong `.runtime/` và được ghi atomic. Chúng lưu `run_id`, supervisor/root identity, state, command, args, timestamps và log paths để launcher mới reconnect an toàn.
@@ -164,6 +192,18 @@ logs/<app_id>/<run_id>.err.log
 Supervisor giữ log handles, vì vậy log tiếp tục được ghi khi launcher Restart, Exit hoặc crash. Tray dùng run active mới nhất làm log target; khi không còn run active, nó dùng historical run mới nhất. Hover trên **O.Logs** hoặc **E.Logs** hiển thị tail đang cập nhật của cùng file.
 
 ## Cài đặt và chạy
+
+Tạo cấu hình local một lần:
+
+```powershell
+Copy-Item setting.yaml.sample setting.yaml
+```
+
+Linux/macOS shell:
+
+```bash
+cp setting.yaml.sample setting.yaml
+```
 
 ```bash
 uv sync

@@ -45,3 +45,7 @@ Thumbs.db
 
 # Local plugin applications; each plugin may manage its own Git repository
 /tools/
+
+# Machine-local planning and active configuration
+/.plan/
+/setting.yaml

@@ -1,0 +1,185 @@
+# =============================================================================
+# Multi-Run Apps - cấu hình đầy đủ
+# =============================================================================
+# File này khai báo tường minh toàn bộ field được launcher hỗ trợ; không dựa vào
+# default ẩn. Khi thêm app mới, nên copy một block hiện có và giữ đủ các field.
+#
+# GLOBAL
+#   log_dir   : thư mục chứa log theo từng run. Path tương đối tính từ file YAML.
+#   session   : "subprocess" (Windows/Linux) hoặc "tmux" (chỉ Linux).
+#   multi_run : giá trị mặc định cho app; từng app vẫn khai báo lại bên dưới.
+#
+# APP
+#   id            : ID ổn định, duy nhất; dùng cho runtime registry và thư mục log.
+#   name          : tên hiển thị trên tray và tên dùng trong CLI.
+#   path          : working directory; launcher tương đương `cd` vào đây trước chạy.
+#   command       : lệnh chính chạy qua shell hệ thống.
+#   args          : danh sách fragment nối NGUYÊN VĂN vào cuối command bằng dấu cách.
+#                   Không có field `params`; cần truyền tham số thì dùng `args`.
+#                   Không có tham số: `args: []`.
+#                   Ví dụ:
+#                     args:
+#                       - "--port 8000"
+#                       - "--host 127.0.0.1"
+#                   Lệnh cuối: <command> --port 8000 --host 127.0.0.1
+#                   Quote, pipe và shell operator trong fragment được giữ nguyên.
+#   enabled       : true = hiển thị/cho phép điều khiển; false = bỏ qua trong UI.
+#   auto_start    : true = tự Start sau khi launcher reconcile runtime hiện có.
+#   multi_run     : true = cho phép nhiều lần Start thủ công cùng app.
+#                   Auto-start vẫn không tạo duplicate run đã được khôi phục.
+#   args_edit     : true = Start thủ công từ tray mở hộp sửa args cho riêng run mới.
+#                   Auto-start, CLI và TUI luôn dùng `args` trong YAML.
+#   close_timeout : số giây graceful Stop trước khi force-close toàn bộ process tree;
+#                   phải lớn hơn 0.
+#   os            : string hoặc list; hỗ trợ win, windows, win10, win11, linux,
+#                   ubuntu, debian.
+# =============================================================================
+
+global:
+  log_dir: "./logs"
+  session: "subprocess"
+  multi_run: false
+
+apps:
+  - id: "screens-trans-chatbot"
+    name: "Screens-trans-chatbot"
+    path: "E:/python_project/Screens-Trans-Chatbot/"
+    command: "uv run main.py"
+    args: []
+    enabled: true
+    auto_start: false
+    multi_run: true
+    args_edit: false
+    close_timeout: 5.0
+    os: "win11"
+
+  - id: "auto-suggest"
+    name: "Auto Suggest"
+    path: "E:/python_project/auto-suggest/"
+    command: "conda run -n ana11 python main.py"
+    args: []
+    enabled: false
+    auto_start: false
+    multi_run: false
+    args_edit: false
+    close_timeout: 5.0
+    os: "win11"
+
+  - id: "copy-content"
+    name: "Copy-Content"
+    path: "E:/python_project/multi-run-apps/tools/copy-content/"
+    command: "conda run -n ana11 python copy-content.py"
+    args: []
+    enabled: true
+    auto_start: true
+    multi_run: false
+    args_edit: false
+    close_timeout: 5.0
+    os: "win11"
+
+  - id: "advance-clipboard"
+    name: "Advance-Clipboard"
+    path: "E:/python_project/multi-run-apps/tools/advance-clipboard/"
+    command: "uv run main.py"
+    args: []
+    enabled: true
+    auto_start: true
+    multi_run: false
+    args_edit: false
+    close_timeout: 5.0
+    os: "win11"
+
+  - id: "tampermonkey-auto"
+    name: "Tampermonkey-Auto"
+    path: "E:/python_project/tampermonkey_auto/"
+    command: "uv run server.py"
+    args: []
+    enabled: true
+    auto_start: false
+    multi_run: false
+    args_edit: false
+    close_timeout: 5.0
+    os: "win11"
+
+  - id: "tampermonkey-main-py"
+    name: "tampermonkey-main.py"
+    path: "E:/python_project/tampermonkey_auto/"
+    command: "uv run main.py"
+    enabled: true
+    auto_start: false
+    multi_run: true
+    args_edit: true
+    close_timeout: 5.0
+    os: "win11"
+    args:
+      - "--timeout 1800"
+      # - "--preflight"
+      - "--role PLAN,REVIEW,DEV"
+      - "--resume"
+      - "--goal "
+
+  - id: "tampermonkey-role-py"
+    name: "tampermonkey-role.py"
+    path: "E:/python_project/tampermonkey_auto/"
+    command: "uv run role.py"
+    enabled: true
+    auto_start: false
+    multi_run: true
+    args_edit: true
+    close_timeout: 5.0
+    os: "win11"
+    args:
+      - "--timeout 1800"
+      # - "--preflight"
+      - "--role PLAN"
+      - "--prompt "
+
+  - id: "8101-local-mcp"
+    name: "8101-local-mcp"
+    path: "C:/Users/admin/personal-mcp-launcher/"
+    command: "uv run main.py"
+    args:
+      - "--repo E:/python_project"
+    enabled: true
+    auto_start: false
+    multi_run: false
+    args_edit: false
+    close_timeout: 5.0
+    os: "win11"
+
+  - id: "hport-mcp-thinkbook"
+    name: "hport-mcp-thinkbook"
+    path: "E:/python_project/multi-run-apps/"
+    command: "hport 8101 -s mcp-thinkbook -y"
+    args: []
+    enabled: true
+    auto_start: false
+    multi_run: false
+    args_edit: false
+    close_timeout: 5.0
+    os: "win11"
+
+  - id: "lan-drive"
+    name: "LAN-Drive"
+    path: "E:/python_project/lan-drive/"
+    command: "uv run lan_drive.py"
+    args:
+      - "--root E:/"
+    enabled: true
+    auto_start: false
+    multi_run: false
+    args_edit: false
+    close_timeout: 5.0
+    os: "win11"
+
+  - id: "pdf-2-png-converter"
+    name: "PDF 2 PNG Converter"
+    path: "E:/python_project/tools/"
+    command: "conda run -n ana11 python pdf_to_png.py"
+    args: []
+    enabled: true
+    auto_start: false
+    multi_run: false
+    args_edit: false
+    close_timeout: 5.0
+    os: "win11"
