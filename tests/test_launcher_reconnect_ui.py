@@ -1,4 +1,7 @@
 import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import subprocess
 import sys
 import tempfile
@@ -8,11 +11,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QMenu
+
 from lib.core import AppController
 from lib.runtime.models import RunRecord
 from lib.runtime.process_identity import get_process_created_at
 from lib.session.subprocess_session import SubprocessSessionManager
 from multi import AppControlWidget, AppManager, SystemTrayApp
+
+
+_QT_APP = QApplication.instance() or QApplication([])
 
 
 class RecoveredRuntimeInfoTests(unittest.TestCase):
@@ -47,20 +56,32 @@ class RecoveredRuntimeInfoTests(unittest.TestCase):
             )
             newer.state = "failed"
             newer.exit_code = 7
+            newer.root_pid = 4321
             newer.created_at = (
                 datetime.now(timezone.utc) - timedelta(minutes=1)
             ).isoformat()
+            terminal_updated_at = "2026-07-12T03:04:05+00:00"
+            expected_last_used = datetime.fromisoformat(
+                terminal_updated_at
+            ).astimezone().strftime("%Y-%m-%d %H:%M:%S")
             session.registry.save(older)
-            session.registry.save(newer)
+            with patch(
+                "lib.runtime.models.utc_now_iso",
+                return_value=terminal_updated_at,
+            ):
+                session.registry.save(newer)
 
             info = session.get_info("history")
 
             self.assertEqual(info["status"], "STOPPED")
             self.assertEqual(info["run_id"], "new-run")
+            self.assertEqual(info["pid"], 4321)
             self.assertEqual(info["stdout_path"], str(root / "new.out.log"))
             self.assertEqual(info["stderr_path"], str(root / "new.err.log"))
             self.assertEqual(info["exit_code"], 7)
             self.assertEqual(info["instances"], 0)
+            self.assertEqual(info["updated_at"], terminal_updated_at)
+            self.assertEqual(info["last_used_time"], expected_last_used)
 
     def test_recovered_manager_uses_same_run_identity_uptime_and_continuing_logs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -110,12 +131,57 @@ class RecoveredRuntimeInfoTests(unittest.TestCase):
             self.assertEqual(info["pid"], os.getpid())
             self.assertEqual(info["stdout_path"], str(stdout_path))
             self.assertEqual(info["stderr_path"], str(stderr_path))
-            self.assertIn("Running (0d 0h 2m", manager.get_status_text(info))
+            self.assertTrue(manager.get_status_text(info).startswith("0d 0h 2m"))
+            self.assertNotIn("Running", manager.get_status_text(info))
             self.assertEqual(manager.get_log_path("out"), str(stdout_path.resolve()))
 
             with stdout_path.open("a", encoding="utf-8") as handle:
                 handle.write("continued after reconnect\n")
             self.assertIn("continued after reconnect", manager.read_log_tail("out"))
+
+    def test_stopped_hover_preview_reads_newest_historical_run_logs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            stdout_path = root / "history.out.log"
+            stderr_path = root / "history.err.log"
+            stdout_path.write_text("historical output tail\n", encoding="utf-8")
+            stderr_path.write_text("historical error tail\n", encoding="utf-8")
+
+            controller = MagicMock()
+            controller.config_manager.get_app.return_value = {
+                "id": "history",
+                "name": "History",
+                "multi_run": False,
+            }
+            controller.config_manager.get_log_dir.return_value = str(root)
+            controller.get_app_status.return_value = {
+                "status": "STOPPED",
+                "instances": 0,
+                "pid": 1234,
+                "last_used_time": "2026-07-12 10:04:05",
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+            }
+            manager = AppManager(controller, "History")
+            menu = QMenu()
+            widget = AppControlWidget(manager, menu)
+            try:
+                self.assertIn(
+                    "historical output tail",
+                    widget.output_log_preview.content_provider(),
+                )
+                self.assertIn(
+                    "historical error tail",
+                    widget.error_log_preview.content_provider(),
+                )
+                self.assertTrue(widget.btn_ologs.isEnabled())
+                self.assertTrue(widget.btn_elogs.isEnabled())
+            finally:
+                widget.timer.stop()
+                widget.output_log_preview.hide_preview()
+                widget.error_log_preview.hide_preview()
+                widget.deleteLater()
+                menu.deleteLater()
 
 
 class AutoStartDecisionTests(unittest.TestCase):
@@ -172,61 +238,225 @@ class AutoStartDecisionTests(unittest.TestCase):
 
 
 class RecoveredUiStateTests(unittest.TestCase):
-    def _manager(self, status_info, multi_run=False):
+    def _manager(self, status_info, multi_run=False, name="Demo"):
         controller = MagicMock()
         controller.config_manager.get_app.return_value = {
             "id": "demo",
-            "name": "Demo",
+            "name": name,
             "multi_run": multi_run,
         }
         controller.get_app_status.return_value = status_info
-        return AppManager(controller, "Demo")
+        return AppManager(controller, name)
 
     def _update_widget(self, manager):
         widget = SimpleNamespace(
             manager=manager,
             lbl_status=MagicMock(),
+            lbl_pid=MagicMock(),
             btn_start=MagicMock(),
             btn_stop=MagicMock(),
         )
         AppControlWidget.update_ui(widget)
         return widget
 
-    def test_status_text_formats_all_recovered_states_and_instance_count(self):
+    @staticmethod
+    def _dispose_widget(widget):
+        widget.timer.stop()
+        widget.output_log_preview.hide_preview()
+        widget.error_log_preview.hide_preview()
+        widget.deleteLater()
+
+    def test_running_primary_text_is_elapsed_only_green_and_instances_in_tooltip(self):
+        single_info = {
+            "status": "RUNNING",
+            "instances": 1,
+            "uptime": "0d 1h 2m 3s",
+        }
+        single = self._manager(single_info).get_status_presentation(single_info)
+        self.assertEqual(single["text"], "0d 1h 2m 3s")
+        self.assertEqual(single["color"], "green")
+        self.assertEqual(single["tooltip"], "Running\n1 active instance")
+        self.assertNotIn("Running", single["text"])
+
+        multi_info = {
+            "status": "RUNNING",
+            "instances": 2,
+            "uptime": "0d 0h 5m 6s",
+        }
+        multiple = self._manager(multi_info).get_status_presentation(multi_info)
+        self.assertEqual(multiple["text"], "0d 0h 5m 6s")
+        self.assertIn("2 active instances", multiple["tooltip"])
+
+    def test_stopped_primary_text_is_terminal_last_used_red_not_uptime(self):
+        status_info = {
+            "status": "STOPPED",
+            "instances": 0,
+            "uptime": "999d 23h 59m 59s",
+            "last_used_time": "2026-07-12 10:04:05",
+        }
+        presentation = self._manager(status_info).get_status_presentation(status_info)
+        self.assertEqual(presentation["text"], "2026-07-12 10:04:05")
+        self.assertEqual(presentation["color"], "#c62828")
+        self.assertEqual(
+            presentation["tooltip"],
+            "Last used: 2026-07-12 10:04:05",
+        )
+        self.assertNotIn(status_info["uptime"], presentation["text"])
+
+    def test_stopped_without_history_uses_never_and_remains_start_eligible(self):
+        status_info = {"status": "STOPPED", "instances": 0}
+        manager = self._manager(status_info)
+        presentation = manager.get_status_presentation(status_info)
+        self.assertEqual(presentation["text"], "Never")
+        self.assertEqual(presentation["color"], "#c62828")
+
+        widget = self._update_widget(manager)
+        widget.btn_stop.setEnabled.assert_called_once_with(False)
+        widget.btn_start.setEnabled.assert_called_once_with(True)
+        widget.lbl_status.setText.assert_called_once_with("Never")
+
+    def test_transitional_state_text_and_colors_are_preserved(self):
         cases = [
-            ({"status": "STARTING", "instances": 1}, "Starting"),
-            ({"status": "RUNNING", "instances": 1, "uptime": "0d 1h 2m 3s"}, "Running (0d 1h 2m 3s)"),
-            ({"status": "RUNNING", "instances": 2, "uptime": "ignored"}, "Running (2 instances)"),
-            ({"status": "STOPPING", "instances": 1}, "Stopping"),
-            ({"status": "ORPHANED", "instances": 1}, "Orphaned"),
-            ({"status": "STOPPED", "instances": 0}, "Stopped"),
+            ("STARTING", 1, "Starting", "#c58b00"),
+            ("STARTING", 2, "Starting (2 instances)", "#c58b00"),
+            ("STOPPING", 1, "Stopping", "#c58b00"),
+            ("ORPHANED", 1, "Orphaned", "#b00020"),
+            ("ORPHANED", 2, "Orphaned (2 instances)", "#b00020"),
         ]
-        for status_info, expected in cases:
-            with self.subTest(status=status_info["status"]):
-                self.assertEqual(
-                    self._manager(status_info).get_status_text(status_info), expected
+        for status, instances, text, color in cases:
+            with self.subTest(status=status, instances=instances):
+                status_info = {"status": status, "instances": instances}
+                presentation = self._manager(status_info).get_status_presentation(
+                    status_info
+                )
+                self.assertEqual(presentation["text"], text)
+                self.assertEqual(presentation["color"], color)
+
+    def test_pid_subtitle_uses_current_historical_and_placeholder_meanings(self):
+        active = self._manager(
+            {"status": "RUNNING", "instances": 1, "pid": 4321}
+        ).get_pid_presentation(
+            {"status": "RUNNING", "instances": 1, "pid": 4321}
+        )
+        self.assertEqual(active["text"], "PID: 4321")
+        self.assertEqual(active["tooltip"], "Managed root PID: 4321")
+
+        stopped = self._manager(
+            {"status": "STOPPED", "instances": 0, "pid": 8765}
+        ).get_pid_presentation(
+            {"status": "STOPPED", "instances": 0, "pid": 8765}
+        )
+        self.assertEqual(stopped["text"], "PID: 8765")
+        self.assertEqual(stopped["tooltip"], "Last run PID: 8765")
+
+        missing = self._manager(
+            {"status": "STOPPED", "instances": 0}
+        ).get_pid_presentation({"status": "STOPPED", "instances": 0})
+        self.assertEqual(missing["text"], "PID: -")
+        self.assertEqual(missing["tooltip"], "Last run PID unavailable")
+
+    def test_button_eligibility_is_unchanged_for_all_states_and_multi_run(self):
+        cases = [
+            ("STARTING", False, False, True),
+            ("RUNNING", False, False, True),
+            ("STOPPING", False, False, True),
+            ("ORPHANED", False, False, False),
+            ("STOPPED", False, True, False),
+            ("STARTING", True, True, True),
+            ("RUNNING", True, True, True),
+            ("STOPPING", True, True, True),
+            ("ORPHANED", True, True, False),
+            ("STOPPED", True, True, False),
+        ]
+        for status, multi_run, start_enabled, stop_enabled in cases:
+            with self.subTest(status=status, multi_run=multi_run):
+                status_info = {"status": status, "instances": 1}
+                widget = self._update_widget(
+                    self._manager(status_info, multi_run=multi_run)
+                )
+                widget.btn_start.setEnabled.assert_called_once_with(start_enabled)
+                widget.btn_stop.setEnabled.assert_called_once_with(stop_enabled)
+
+    def test_layout_uses_full_captions_pid_subtitle_and_name_stretch(self):
+        name = "Screens-trans-chatbot with a fully visible launcher name"
+        manager = self._manager(
+            {
+                "status": "STOPPED",
+                "instances": 0,
+                "pid": 2468,
+                "last_used_time": "2026-07-12 10:04:05",
+            },
+            name=name,
+        )
+        menu = QMenu()
+        widget = AppControlWidget(manager, menu)
+        try:
+            self.assertEqual(widget.lbl_name.text(), name)
+            self.assertEqual(widget.lbl_name.textFormat(), Qt.TextFormat.PlainText)
+            self.assertTrue(widget.lbl_name.font().bold())
+            self.assertIn(name, widget.lbl_name.toolTip())
+            self.assertIn("working directory", widget.lbl_name.toolTip())
+            expected_name_width = (
+                widget.lbl_name.fontMetrics().horizontalAdvance(name) + 8
+            )
+            self.assertGreaterEqual(
+                widget.name_container.minimumWidth(),
+                expected_name_width,
+            )
+            self.assertEqual(widget.layout().stretch(0), 1)
+            self.assertEqual(widget.lbl_pid.text(), "PID: 2468")
+            if widget.lbl_name.font().pointSize() > 0:
+                self.assertLess(
+                    widget.lbl_pid.font().pointSize(),
+                    widget.lbl_name.font().pointSize(),
                 )
 
-    def test_starting_keeps_stop_enabled_and_non_multi_start_disabled(self):
-        widget = self._update_widget(
-            self._manager({"status": "STARTING", "instances": 1})
-        )
-        widget.btn_stop.setEnabled.assert_called_once_with(True)
-        widget.btn_start.setEnabled.assert_called_once_with(False)
-        widget.lbl_status.setText.assert_called_once_with("Starting")
+            captions = {
+                widget.btn_start: "Start",
+                widget.btn_stop: "Stop",
+                widget.btn_ologs: "O.Logs",
+                widget.btn_elogs: "E.Logs",
+            }
+            for button, caption in captions.items():
+                self.assertEqual(button.text(), caption)
+                required_width = button.fontMetrics().horizontalAdvance(caption) + 24
+                self.assertGreaterEqual(button.minimumWidth(), required_width)
+                self.assertGreaterEqual(button.minimumWidth(), button.sizeHint().width())
+            self.assertGreaterEqual(widget.minimumWidth(), widget.sizeHint().width())
+        finally:
+            self._dispose_widget(widget)
+            menu.deleteLater()
 
-    def test_orphaned_disables_stop_and_stopped_enables_start(self):
-        orphaned = self._update_widget(
-            self._manager({"status": "ORPHANED", "instances": 1})
+    def test_menu_minimum_width_tracks_embedded_row_size_hint(self):
+        manager = self._manager(
+            {"status": "STOPPED", "instances": 0},
+            name="Long application name for menu sizing",
         )
-        orphaned.btn_stop.setEnabled.assert_called_once_with(False)
-        orphaned.btn_start.setEnabled.assert_called_once_with(False)
-
-        stopped = self._update_widget(
-            self._manager({"status": "STOPPED", "instances": 0})
+        menu = QMenu()
+        tray = SimpleNamespace(
+            menu=menu,
+            managers=[manager],
+            refresh_all=lambda: None,
+            stop_all_apps=lambda: None,
+            restart_app=lambda: None,
+            exit_app=lambda: None,
         )
-        stopped.btn_stop.setEnabled.assert_called_once_with(False)
-        stopped.btn_start.setEnabled.assert_called_once_with(True)
+        try:
+            SystemTrayApp.refresh_menu(tray)
+            row_action = next(
+                action
+                for action in menu.actions()
+                if hasattr(action, "defaultWidget") and action.defaultWidget() is not None
+            )
+            row_widget = row_action.defaultWidget()
+            self.assertGreaterEqual(
+                menu.minimumWidth(),
+                row_widget.minimumWidth() + 8,
+            )
+        finally:
+            for widget in menu.findChildren(AppControlWidget):
+                self._dispose_widget(widget)
+            menu.deleteLater()
 
 
 class LauncherLifecycleTests(unittest.TestCase):

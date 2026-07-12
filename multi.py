@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QLineEdit,
     QMessageBox,
+    QSizePolicy,
 )
 from PyQt6.QtGui import QIcon, QAction, QFont, QGuiApplication
 from PyQt6.QtCore import QTimer, pyqtSignal, Qt, QPoint
@@ -205,23 +206,58 @@ class AppManager:
         else:
             subprocess.Popen(["xdg-open", path])
 
-    def get_status_text(self, status_info=None):
-        """Format all persisted runtime states for the tray UI."""
+    def get_status_presentation(self, status_info=None):
+        """Return compact row text, color, and accessible status detail."""
         status_info = status_info or self.get_status_info()
         status = status_info.get("status", "STOPPED")
         instances = int(status_info.get("instances") or 0)
 
         if status == "RUNNING":
-            if instances > 1:
-                return f"Running ({instances} instances)"
-            return f"Running ({status_info.get('uptime', 'unknown')})"
+            text = status_info.get("uptime") or "0d 0h 0m 0s"
+            instance_text = (
+                f"{instances} active instances"
+                if instances != 1
+                else "1 active instance"
+            )
+            return {
+                "text": text,
+                "color": "green",
+                "tooltip": f"Running\n{instance_text}",
+            }
         if status == "STARTING":
-            return "Starting" if instances <= 1 else f"Starting ({instances} instances)"
+            text = "Starting" if instances <= 1 else f"Starting ({instances} instances)"
+            return {"text": text, "color": "#c58b00", "tooltip": text}
         if status == "STOPPING":
-            return "Stopping" if instances <= 1 else f"Stopping ({instances} instances)"
+            text = "Stopping" if instances <= 1 else f"Stopping ({instances} instances)"
+            return {"text": text, "color": "#c58b00", "tooltip": text}
         if status == "ORPHANED":
-            return "Orphaned" if instances <= 1 else f"Orphaned ({instances} instances)"
-        return "Stopped"
+            text = "Orphaned" if instances <= 1 else f"Orphaned ({instances} instances)"
+            return {"text": text, "color": "#b00020", "tooltip": text}
+
+        last_used_time = status_info.get("last_used_time")
+        text = last_used_time or "Never"
+        tooltip = f"Last used: {last_used_time}" if last_used_time else "Never used"
+        return {"text": text, "color": "#c62828", "tooltip": tooltip}
+
+    def get_status_text(self, status_info=None):
+        """Return the compact primary status text used by launcher rows."""
+        return self.get_status_presentation(status_info)["text"]
+
+    def get_pid_presentation(self, status_info=None):
+        """Return the managed root PID subtitle without implying stale PIDs are live."""
+        status_info = status_info or self.get_status_info()
+        status = status_info.get("status", "STOPPED")
+        pid = int(status_info.get("pid") or 0)
+        text = f"PID: {pid}" if pid > 0 else "PID: -"
+        if status == "STOPPED":
+            tooltip = f"Last run PID: {pid}" if pid > 0 else "Last run PID unavailable"
+        else:
+            tooltip = (
+                f"Managed root PID: {pid}"
+                if pid > 0
+                else "Managed root PID unavailable"
+            )
+        return {"text": text, "tooltip": tooltip}
 
     def get_workdir(self):
         """Return the directory opened when the app name is clicked."""
@@ -366,11 +402,7 @@ class LiveLogPreview(QLabel):
 
 
 class AppControlWidget(QWidget):
-    """Widget custom display in Menu: [Name | Status | Start | Stop | O.Logs | E.Logs]
-
-    Clicking the name opens the app directory; the log buttons open specific
-    files instead of the folder.
-    """
+    """Compact launcher row with app identity, status, and actions."""
 
     def __init__(self, manager, parent_menu):
         super().__init__()
@@ -381,36 +413,69 @@ class AppControlWidget(QWidget):
         layout.setContentsMargins(10, 5, 10, 5)
         layout.setSpacing(10)
 
-        # App Name (clickable to open workdir)
-        self.lbl_name = ClickableLabel(f"<b>{manager.name}</b>")
-        self.lbl_name.setFixedWidth(120)
+        # App identity: full name plus a small managed root-PID subtitle.
+        self.name_container = QWidget(self)
+        self.name_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        name_layout = QVBoxLayout(self.name_container)
+        name_layout.setContentsMargins(0, 0, 0, 0)
+        name_layout.setSpacing(1)
+
+        self.lbl_name = ClickableLabel(manager.name)
+        self.lbl_name.setTextFormat(Qt.TextFormat.PlainText)
+        name_font = self.lbl_name.font()
+        name_font.setBold(True)
+        self.lbl_name.setFont(name_font)
         self.lbl_name.clicked.connect(self.on_name_clicked)
-        self.lbl_name.setToolTip("Open application working directory")
+        self.lbl_name.setToolTip(
+            f"{manager.name}\nClick to open application working directory"
+        )
+        name_minimum = self.lbl_name.fontMetrics().horizontalAdvance(manager.name) + 8
+        self.lbl_name.setMinimumWidth(name_minimum)
+        self.name_container.setMinimumWidth(name_minimum)
 
-        # Status
-        self.lbl_status = QLabel(manager.get_status_text())
-        self.lbl_status.setFixedWidth(170)
-        self.lbl_status.setStyleSheet("color: gray;")
+        self.lbl_pid = QLabel("PID: -")
+        pid_font = self.lbl_pid.font()
+        if pid_font.pointSize() > 0:
+            pid_font.setPointSize(max(7, pid_font.pointSize() - 2))
+        self.lbl_pid.setFont(pid_font)
+        self.lbl_pid.setStyleSheet("color: #808080;")
+        name_layout.addWidget(self.lbl_name)
+        name_layout.addWidget(self.lbl_pid)
 
-        # Start Button (+)
+        # Primary status: elapsed-only for running, terminal update time for stopped.
+        self.lbl_status = QLabel()
+        timestamp_width = self.lbl_status.fontMetrics().horizontalAdvance(
+            "2000-00-00 00:00:00"
+        )
+        self.lbl_status.setMinimumWidth(timestamp_width + 8)
+
         self.btn_start = QPushButton("Start")
-        self.btn_start.setFixedWidth(50)
+        self.btn_start.setToolTip(f"Start {manager.name}")
         self.btn_start.clicked.connect(self.on_start)
 
-        # Stop Button (-)
         self.btn_stop = QPushButton("Stop")
-        self.btn_stop.setFixedWidth(50)
+        self.btn_stop.setToolTip(f"Stop {manager.name}")
         self.btn_stop.clicked.connect(self.on_stop)
 
-        # Output / Error log buttons. Hover shows a live 7-line preview;
-        # clicking still opens the corresponding log file.
+        # Hover remains available for active and historical stopped-run logs.
         self.btn_ologs = HoverLogButton("O.Logs")
-        self.btn_ologs.setFixedWidth(40)
+        self.btn_ologs.setToolTip("Open output log; hover to preview")
         self.btn_ologs.clicked.connect(self.manager.view_output_log)
 
         self.btn_elogs = HoverLogButton("E.Logs")
-        self.btn_elogs.setFixedWidth(40)
+        self.btn_elogs.setToolTip("Open error log; hover to preview")
         self.btn_elogs.clicked.connect(self.manager.view_error_log)
+
+        for button in (
+            self.btn_start,
+            self.btn_stop,
+            self.btn_ologs,
+            self.btn_elogs,
+        ):
+            self._fit_button_to_caption(button)
 
         self.output_log_preview = LiveLogPreview(
             self.btn_ologs,
@@ -429,14 +494,17 @@ class AppControlWidget(QWidget):
         self.btn_elogs.hover_entered.connect(self.error_log_preview.show_preview)
         self.btn_elogs.hover_left.connect(self.error_log_preview.hide_preview)
 
-        layout.addWidget(self.lbl_name)
+        layout.addWidget(self.name_container)
         layout.addWidget(self.lbl_status)
         layout.addWidget(self.btn_start)
         layout.addWidget(self.btn_stop)
         layout.addWidget(self.btn_ologs)
         layout.addWidget(self.btn_elogs)
+        layout.setStretch(0, 1)
 
         self.setLayout(layout)
+        layout.activate()
+        self.setMinimumWidth(self.sizeHint().width())
 
         # Timer update status UI realtime
         self.timer = QTimer(self)
@@ -445,19 +513,22 @@ class AppControlWidget(QWidget):
 
         self.update_ui()
 
+    @staticmethod
+    def _fit_button_to_caption(button):
+        text_width = button.fontMetrics().horizontalAdvance(button.text()) + 24
+        button.setMinimumWidth(max(button.sizeHint().width(), text_width))
+
     def update_ui(self):
         status_info = self.manager.get_status_info()
         status = status_info.get("status", "STOPPED")
-        self.lbl_status.setText(self.manager.get_status_text(status_info))
+        presentation = self.manager.get_status_presentation(status_info)
+        self.lbl_status.setText(presentation["text"])
+        self.lbl_status.setStyleSheet(f"color: {presentation['color']};")
+        self.lbl_status.setToolTip(presentation["tooltip"])
 
-        color = {
-            "STARTING": "#c58b00",
-            "RUNNING": "green",
-            "STOPPING": "#c58b00",
-            "ORPHANED": "#b00020",
-            "STOPPED": "gray",
-        }.get(status, "gray")
-        self.lbl_status.setStyleSheet(f"color: {color};")
+        pid_presentation = self.manager.get_pid_presentation(status_info)
+        self.lbl_pid.setText(pid_presentation["text"])
+        self.lbl_pid.setToolTip(pid_presentation["tooltip"])
 
         multi_run = self.manager.app_config.get("multi_run", False)
         controllable = status in {"STARTING", "RUNNING", "STOPPING"}
@@ -576,6 +647,8 @@ class SystemTrayApp(QSystemTrayIcon):
 
     def refresh_menu(self):
         self.menu.clear()
+        self.menu.setMinimumWidth(0)
+        row_minimum_width = 0
 
         # Header
         header = QAction("Launcher Control Center", self.menu)
@@ -594,6 +667,11 @@ class SystemTrayApp(QSystemTrayIcon):
                 widget = AppControlWidget(mgr, self.menu)
                 action.setDefaultWidget(widget)
                 self.menu.addAction(action)
+                row_minimum_width = max(
+                    row_minimum_width,
+                    widget.minimumWidth(),
+                    widget.sizeHint().width(),
+                )
 
         self.menu.addSeparator()
 
@@ -613,6 +691,11 @@ class SystemTrayApp(QSystemTrayIcon):
         exit_action = QAction("Exit Launcher", self.menu)
         exit_action.triggered.connect(self.exit_app)
         self.menu.addAction(exit_action)
+
+        if row_minimum_width:
+            self.menu.setMinimumWidth(
+                max(self.menu.minimumSizeHint().width(), row_minimum_width + 8)
+            )
 
     def refresh_all(self):
         """Reload config and refresh menu."""

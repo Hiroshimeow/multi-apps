@@ -344,6 +344,9 @@ class SubprocessSessionManager(BaseSessionManager):
         created_at = self._parse_timestamp(record.created_at)
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
+        updated_at = self._parse_timestamp(record.updated_at)
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
         uptime = datetime.now(timezone.utc) - created_at
         total_seconds = max(0, int(uptime.total_seconds()))
         days, remainder = divmod(total_seconds, 86400)
@@ -361,6 +364,8 @@ class SubprocessSessionManager(BaseSessionManager):
             "uptime": f"{days}d {hours}h {minutes}m {seconds}s",
             "start_time": created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             "created_at": record.created_at,
+            "updated_at": record.updated_at,
+            "last_used_time": updated_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             "stdout_path": record.stdout_path,
             "stderr_path": record.stderr_path,
             "exit_code": record.exit_code,
