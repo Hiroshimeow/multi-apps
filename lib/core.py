@@ -17,8 +17,11 @@ class AppController:
             return TmuxSessionManager(self.config["global"])
         return SubprocessSessionManager(self.config["global"])
 
-    def _get_runner(self, app_config):
-        return CommandRunner(app_config, self.config["global"])
+    def _get_runner(self, app_config, args_override=None):
+        runtime_config = dict(app_config)
+        if args_override is not None:
+            runtime_config["args"] = CommandRunner.normalize_args(args_override)
+        return CommandRunner(runtime_config, self.config["global"])
 
     def list_apps(self):
         return self.config_manager.get_apps()
@@ -44,14 +47,20 @@ class AppController:
             return False
         return self.get_app_status(app_name).get("status") == "STOPPED"
 
-    def start_app(self, app_name, *, wait_for_ready=True):
+    def preview_app_command(self, app_name, args_override=None):
+        app = self.config_manager.get_app(app_name)
+        if not app:
+            return ""
+        return self._get_runner(app, args_override=args_override).build_command()
+
+    def start_app(self, app_name, *, wait_for_ready=True, args_override=None):
         app = self.config_manager.get_app(app_name)
         if not app:
             print_error(f"App '{app_name}' not found.")
             return False
 
         try:
-            runner = self._get_runner(app)
+            runner = self._get_runner(app, args_override=args_override)
             if isinstance(self.session_manager, SubprocessSessionManager):
                 success, message = self.session_manager.start(
                     runner,

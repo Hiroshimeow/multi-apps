@@ -17,6 +17,10 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QHBoxLayout,
+    QVBoxLayout,
+    QDialog,
+    QDialogButtonBox,
+    QLineEdit,
     QMessageBox,
 )
 from PyQt6.QtGui import QIcon, QAction, QFont, QGuiApplication
@@ -24,12 +28,80 @@ from PyQt6.QtCore import QTimer, pyqtSignal, Qt, QPoint
 
 # Import from modular library
 from lib.core import AppController
+from lib.runners.command_runner import CommandRunner
 from lib.runtime.single_instance import SingleInstanceLock
 from lib.utils import is_windows, is_linux
 
 # ==========================================
 # 1. WRAPPERS
 # ==========================================
+
+
+class ArgsEditModel:
+    """One-run argument override without parsing shell syntax."""
+
+    def __init__(self, app_config):
+        self.command = app_config["command"]
+        self.args_text = CommandRunner.args_text(app_config.get("args", []))
+
+    def set_args_text(self, value):
+        self.args_text = str(value)
+
+    def args_override(self):
+        return CommandRunner.normalize_args([self.args_text])
+
+    def final_command(self):
+        return CommandRunner.build_command_text(
+            self.command,
+            self.args_override(),
+        )
+
+
+class ArgsEditDialog(QDialog):
+    """Edit arguments for exactly one manual GUI run."""
+
+    def __init__(self, app_config, parent=None):
+        super().__init__(parent)
+        self.model = ArgsEditModel(app_config)
+        self.setWindowTitle(f"Start {app_config['name']} with arguments")
+        self.setMinimumWidth(620)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Arguments"))
+
+        self.args_input = QLineEdit(self.model.args_text)
+        self.args_input.setPlaceholderText("Arguments for this run only")
+        layout.addWidget(self.args_input)
+
+        layout.addWidget(QLabel("Final command"))
+        self.command_preview = QLabel()
+        self.command_preview.setTextFormat(Qt.TextFormat.PlainText)
+        self.command_preview.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.command_preview.setWordWrap(True)
+        layout.addWidget(self.command_preview)
+
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+        self.args_input.textChanged.connect(self._update_preview)
+        self.args_input.returnPressed.connect(self.accept)
+        self._update_preview(self.args_input.text())
+        self.args_input.selectAll()
+        self.args_input.setFocus()
+
+    def _update_preview(self, value):
+        self.model.set_args_text(value)
+        self.command_preview.setText(self.model.final_command())
+
+    def args_override(self):
+        return self.model.args_override()
 
 
 class AppManager:
@@ -43,9 +115,27 @@ class AppManager:
         self.name = app_name
         self.app_config = self.controller.config_manager.get_app(app_name)
 
-    def launch(self):
-        """Start the app without blocking the Qt event thread for readiness."""
-        success = self.controller.start_app(self.name, wait_for_ready=False)
+    def can_start_manually(self):
+        if self.app_config.get("multi_run", False):
+            return True
+        return self.get_status_info().get("status", "STOPPED") == "STOPPED"
+
+    def launch(self, *, manual=False, parent=None):
+        """Start without blocking Qt; edit args only for a manual GUI request."""
+        args_override = None
+        if manual:
+            if not self.can_start_manually():
+                return False, "Start is blocked by an active or orphaned run"
+            if self.app_config.get("args_edit", False):
+                dialog = ArgsEditDialog(self.app_config, parent)
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return False, "Cancelled"
+                args_override = dialog.args_override()
+
+        kwargs = {"wait_for_ready": False}
+        if args_override is not None:
+            kwargs["args_override"] = args_override
+        success = self.controller.start_app(self.name, **kwargs)
         return success, "Started" if success else "Failed"
 
     def stop_all(self):
@@ -354,7 +444,7 @@ class AppControlWidget(QWidget):
         self.btn_start.setEnabled(status == "STOPPED" or multi_run)
 
     def on_start(self):
-        success, msg = self.manager.launch()
+        success, msg = self.manager.launch(manual=True, parent=self)
         # Update immediately
         self.update_ui()
         # Do not close menu
