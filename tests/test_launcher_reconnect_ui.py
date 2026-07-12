@@ -403,6 +403,28 @@ class LauncherLifecycleTests(unittest.TestCase):
         controller.stop_all.assert_not_called()
         controller.reconcile.assert_not_called()
 
+        suppressed_ids = {"demo"}
+        controller.config_manager.get_app.return_value = {
+            "id": "demo",
+            "name": "Demo",
+        }
+        tray.managers = [AppManager(controller, "Demo", suppressed_ids)]
+        tray.startup_auto_start_suppressed_ids = suppressed_ids
+        controller.reset_mock()
+
+        self.assertEqual(tray.startup_auto_start_suppressed_ids, {"demo"})
+        self.assertTrue(tray.managers[0].startup_auto_start_suppressed)
+
+        SystemTrayApp.auto_start_apps(tray)
+
+        self.assertEqual(tray.startup_auto_start_suppressed_ids, set())
+        self.assertFalse(tray.managers[0].startup_auto_start_suppressed)
+        controller.reconcile.assert_called_once_with()
+        controller.should_auto_start.assert_not_called()
+        controller.start_app.assert_not_called()
+        controller.stop_app.assert_not_called()
+        controller.stop_all.assert_not_called()
+
     @unittest.skipUnless(os.name == "nt", "Windows launcher process flags")
     def test_replacement_launcher_is_detached_from_console_and_stdio(self):
         tray = SimpleNamespace()

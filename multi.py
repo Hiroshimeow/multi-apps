@@ -110,11 +110,28 @@ class AppManager:
     Adapts the interface for the GUI.
     """
 
-    def __init__(self, controller, app_name):
+    def __init__(
+        self,
+        controller,
+        app_name,
+        startup_auto_start_suppressed_ids=None,
+    ):
         self.controller = controller
         self.name = app_name
         self.app_config = self.controller.config_manager.get_app(app_name)
-        self.startup_auto_start_suppressed = False
+        self._startup_auto_start_suppressed_ids = (
+            startup_auto_start_suppressed_ids
+            if startup_auto_start_suppressed_ids is not None
+            else set()
+        )
+
+    @property
+    def app_id(self):
+        return str(self.app_config.get("id") or self.name)
+
+    @property
+    def startup_auto_start_suppressed(self):
+        return self.app_id in self._startup_auto_start_suppressed_ids
 
     def can_start_manually(self):
         if self.app_config.get("multi_run", False):
@@ -130,7 +147,7 @@ class AppManager:
             if self.app_config.get("args_edit", False):
                 # Dequeue this app from the one-shot startup auto-start before
                 # entering QDialog.exec(), which runs a nested Qt event loop.
-                self.startup_auto_start_suppressed = True
+                self._startup_auto_start_suppressed_ids.add(self.app_id)
                 dialog = ArgsEditDialog(self.app_config, parent)
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return False, "Cancelled"
@@ -477,6 +494,7 @@ class SystemTrayApp(QSystemTrayIcon):
         super().__init__(icon, parent)
         self.managers = []
         self.controller = None
+        self.startup_auto_start_suppressed_ids = set()
         self.instance_lock = instance_lock
         self._restart_requested = False
         self.load_config()
@@ -497,13 +515,22 @@ class SystemTrayApp(QSystemTrayIcon):
 
     def auto_start_apps(self):
         print("Auto-starting apps with auto_start=true...")
-        self.controller.reconcile()
-        for mgr in self.managers:
-            if getattr(mgr, "startup_auto_start_suppressed", False):
-                continue
-            if self.controller.should_auto_start(mgr.name):
-                print(f"  -> Starting: {mgr.name}")
-                mgr.launch()
+        suppressed_ids = getattr(
+            self,
+            "startup_auto_start_suppressed_ids",
+            None,
+        )
+        try:
+            self.controller.reconcile()
+            for mgr in self.managers:
+                if getattr(mgr, "startup_auto_start_suppressed", False):
+                    continue
+                if self.controller.should_auto_start(mgr.name):
+                    print(f"  -> Starting: {mgr.name}")
+                    mgr.launch()
+        finally:
+            if suppressed_ids is not None:
+                suppressed_ids.clear()
 
     def load_config(self):
         # Initialize AppController
@@ -540,7 +567,11 @@ class SystemTrayApp(QSystemTrayIcon):
                     continue
 
             # Create Manager wrapper
-            mgr = AppManager(self.controller, app["name"])
+            mgr = AppManager(
+                self.controller,
+                app["name"],
+                self.startup_auto_start_suppressed_ids,
+            )
             self.managers.append(mgr)
 
     def refresh_menu(self):

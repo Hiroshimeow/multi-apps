@@ -294,25 +294,32 @@ class ArgsEditNestedEventTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def _command(self):
+    def _command(self, sleep_seconds=10):
         parts = [
             sys.executable,
             "-c",
             (
                 "import sys,time; "
                 "print('|'.join(sys.argv[1:]), flush=True); "
-                "time.sleep(10)"
+                f"time.sleep({sleep_seconds})"
             ),
         ]
         return subprocess.list2cmdline(parts) if os.name == "nt" else shlex.join(parts)
 
-    def _controller_and_managers(self, root, *, multi_run=False, include_other=False):
+    def _controller_and_managers(
+        self,
+        root,
+        *,
+        multi_run=False,
+        include_other=False,
+        command_sleep=10,
+    ):
         apps = [
             {
                 "id": "race",
                 "name": "Race",
                 "path": str(root),
-                "command": self._command(),
+                "command": self._command(command_sleep),
                 "args": ["--yaml"],
                 "enabled": True,
                 "auto_start": True,
@@ -327,7 +334,7 @@ class ArgsEditNestedEventTests(unittest.TestCase):
                     "id": "other",
                     "name": "Other",
                     "path": str(root),
-                    "command": self._command(),
+                    "command": self._command(command_sleep),
                     "args": ["--other-yaml"],
                     "enabled": True,
                     "auto_start": True,
@@ -347,12 +354,46 @@ class ArgsEditNestedEventTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        suppressed_ids = set()
         controller = AppController(str(config_path))
-        managers = [AppManager(controller, app["name"]) for app in apps]
-        tray = SimpleNamespace(controller=controller, managers=managers)
+        managers = [
+            AppManager(controller, app["name"], suppressed_ids)
+            for app in apps
+        ]
+        tray = SimpleNamespace(
+            controller=controller,
+            managers=managers,
+            startup_auto_start_suppressed_ids=suppressed_ids,
+            config_path=config_path,
+            controllers=[controller],
+        )
+        tray.load_config = lambda: SystemTrayApp.load_config(tray)
+        tray.refresh_menu = lambda: None
         return controller, managers, tray
 
-    def _cleanup(self, controller, app_names):
+    @staticmethod
+    def _track_starts(controller, calls):
+        original_start = controller.start_app
+
+        def tracked_start(app_name, **kwargs):
+            calls.append((app_name, dict(kwargs)))
+            return original_start(app_name, **kwargs)
+
+        controller.start_app = tracked_start
+
+    def _refresh_tray(self, tray, count=1, calls=None):
+        for _refresh in range(count):
+            with patch(
+                "multi.AppController",
+                side_effect=lambda _path: AppController(str(tray.config_path)),
+            ):
+                SystemTrayApp.refresh_all(tray)
+            tray.controllers.append(tray.controller)
+            if calls is not None:
+                self._track_starts(tray.controller, calls)
+
+    def _cleanup(self, tray, app_names):
+        controller = tray.controller
         for app_name in app_names:
             for _attempt in range(3):
                 if controller.get_app_status(app_name)["status"] == "STOPPED":
@@ -360,12 +401,13 @@ class ArgsEditNestedEventTests(unittest.TestCase):
                 if controller.stop_app(app_name):
                     break
                 time.sleep(0.1)
-        client = controller.session_manager.client
-        deadline = time.monotonic() + 3.0
-        while client._keepers and time.monotonic() < deadline:
-            client.reap_finished()
-            time.sleep(0.02)
-        self.assertFalse(client._keepers)
+        for known_controller in tray.controllers:
+            client = known_controller.session_manager.client
+            deadline = time.monotonic() + 3.0
+            while client._keepers and time.monotonic() < deadline:
+                client.reap_finished()
+                time.sleep(0.02)
+            self.assertFalse(client._keepers)
 
     def _run_nested_case(self, *, accept, multi_run=False, include_other=False):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -402,7 +444,7 @@ class ArgsEditNestedEventTests(unittest.TestCase):
                 calls = list(start_app.call_args_list)
                 suppressed = selected.startup_auto_start_suppressed
             finally:
-                self._cleanup(controller, app_names)
+                self._cleanup(tray, app_names)
 
             return {
                 "before_count": before_count,
@@ -419,7 +461,7 @@ class ArgsEditNestedEventTests(unittest.TestCase):
         self.assertEqual(outcome["before_count"], 0)
         self.assertEqual(outcome["records"], [])
         self.assertEqual(outcome["calls"], [])
-        self.assertTrue(outcome["suppressed"])
+        self.assertFalse(outcome["suppressed"])
 
     def test_pending_auto_start_accept_non_multi_creates_one_edited_run(self):
         outcome = self._run_nested_case(accept=True, multi_run=False)
@@ -465,6 +507,151 @@ class ArgsEditNestedEventTests(unittest.TestCase):
         self.assertEqual(
             outcome["calls"][0].kwargs,
             {"wait_for_ready": False},
+        )
+
+    def _wait_stopped(self, controller, app_name, timeout=8.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if controller.get_app_status(app_name)["status"] == "STOPPED":
+                return
+            time.sleep(0.02)
+        self.fail(f"{app_name} did not stop")
+
+    def _run_refresh_case(
+        self,
+        *,
+        accept,
+        multi_run=False,
+        include_other=False,
+        command_sleep=10,
+        wait_selected_stopped=False,
+        refresh_count=2,
+    ):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            controller, managers, tray = self._controller_and_managers(
+                root,
+                multi_run=multi_run,
+                include_other=include_other,
+                command_sleep=command_sleep,
+            )
+            selected = managers[0]
+            app_names = [manager.name for manager in managers]
+            edited = '--edited "two words"'
+            calls = []
+            self._track_starts(controller, calls)
+
+            class TimedDialog(ArgsEditDialog):
+                def __init__(self, app_config, parent=None):
+                    super().__init__(app_config, parent)
+                    self.args_input.setText(edited)
+                    QTimer.singleShot(0, self.accept if accept else self.reject)
+
+            try:
+                with patch("multi.ArgsEditDialog", TimedDialog):
+                    result = selected.launch(manual=True)
+                if wait_selected_stopped:
+                    self._wait_stopped(controller, "Race")
+
+                self._refresh_tray(tray, count=refresh_count, calls=calls)
+                replacement_selected = next(
+                    manager for manager in tray.managers if manager.app_id == "race"
+                )
+                replacement_suppressed_before = (
+                    replacement_selected.startup_auto_start_suppressed
+                )
+                suppressed_ids_before = set(
+                    tray.startup_auto_start_suppressed_ids
+                )
+                SystemTrayApp.auto_start_apps(tray)
+                QApplication.processEvents()
+                records = tray.controller.session_manager.registry.list_records()
+                suppressed_ids_after = set(
+                    tray.startup_auto_start_suppressed_ids
+                )
+                replacement_suppressed_after = (
+                    replacement_selected.startup_auto_start_suppressed
+                )
+            finally:
+                self._cleanup(tray, app_names)
+
+            return {
+                "result": result,
+                "records": records,
+                "calls": calls,
+                "suppressed_ids_before": suppressed_ids_before,
+                "suppressed_ids_after": suppressed_ids_after,
+                "replacement_suppressed_before": replacement_suppressed_before,
+                "replacement_suppressed_after": replacement_suppressed_after,
+                "refresh_count": refresh_count,
+            }
+
+    def test_cancel_refresh_then_pending_auto_start_creates_no_selected_run(self):
+        outcome = self._run_refresh_case(accept=False, refresh_count=3)
+
+        self.assertEqual(outcome["result"], (False, "Cancelled"))
+        self.assertEqual(outcome["records"], [])
+        self.assertEqual(outcome["calls"], [])
+        self.assertEqual(outcome["suppressed_ids_before"], {"race"})
+        self.assertEqual(outcome["suppressed_ids_after"], set())
+        self.assertTrue(outcome["replacement_suppressed_before"])
+        self.assertFalse(outcome["replacement_suppressed_after"])
+
+    def test_non_multi_accept_refresh_after_fast_exit_keeps_one_edited_run(self):
+        outcome = self._run_refresh_case(
+            accept=True,
+            command_sleep=0.2,
+            wait_selected_stopped=True,
+        )
+
+        race_records = [
+            record for record in outcome["records"] if record.app_id == "race"
+        ]
+        self.assertEqual(outcome["result"], (True, "Started"))
+        self.assertEqual(len(race_records), 1)
+        self.assertEqual(race_records[0].args, ['--edited "two words"'])
+        self.assertEqual(
+            outcome["calls"],
+            [
+                (
+                    "Race",
+                    {
+                        "wait_for_ready": False,
+                        "args_override": ['--edited "two words"'],
+                    },
+                )
+            ],
+        )
+
+    def test_multi_run_accept_refresh_has_no_automatic_yaml_run(self):
+        outcome = self._run_refresh_case(
+            accept=True,
+            multi_run=True,
+        )
+
+        race_records = [
+            record for record in outcome["records"] if record.app_id == "race"
+        ]
+        self.assertEqual(outcome["result"], (True, "Started"))
+        self.assertEqual(len(race_records), 1)
+        self.assertEqual(race_records[0].args, ['--edited "two words"'])
+        self.assertEqual(len(outcome["calls"]), 1)
+        self.assertIn("args_override", outcome["calls"][0][1])
+
+    def test_refresh_suppression_still_allows_other_auto_start_once(self):
+        outcome = self._run_refresh_case(
+            accept=False,
+            include_other=True,
+        )
+
+        self.assertEqual(outcome["result"], (False, "Cancelled"))
+        self.assertEqual(
+            [(record.app_id, record.args) for record in outcome["records"]],
+            [("other", ["--other-yaml"])],
+        )
+        self.assertEqual(
+            outcome["calls"],
+            [("Other", {"wait_for_ready": False})],
         )
 
 
