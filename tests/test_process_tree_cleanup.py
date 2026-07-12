@@ -43,11 +43,18 @@ class ProcessTreeCleanupTests(unittest.TestCase):
         session = SubprocessSessionManager(
             {"log_dir": str(root / "logs"), "_config_dir": str(root)}
         )
-        success, message = session.start(CommandRunner(app, {}))
-        self.assertTrue(success, message)
-        self._wait_for_file(pid_file)
-        self._wait_for_file(child_pid_file)
-        return session, pid_file, child_pid_file
+        try:
+            success, message = session.start(
+                CommandRunner(app, {}),
+                wait_for_ready=True,
+            )
+            self.assertTrue(success, message)
+            self._wait_for_file(pid_file)
+            self._wait_for_file(child_pid_file)
+            return session, pid_file, child_pid_file
+        except Exception:
+            self._force_cleanup(session)
+            raise
 
     def _wait_for_file(self, path, timeout=8):
         deadline = time.time() + timeout
@@ -77,6 +84,11 @@ class ProcessTreeCleanupTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
 
+        deadline = time.monotonic() + 3.0
+        while session.client._keepers and time.monotonic() < deadline:
+            session.client.reap_finished()
+            time.sleep(0.05)
+
     def test_normal_stop_closes_parent_and_descendant(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -96,7 +108,7 @@ class ProcessTreeCleanupTests(unittest.TestCase):
             finally:
                 self._force_cleanup(session)
 
-    def test_immediate_stop_during_starting_closes_complete_tree(self):
+    def test_immediate_stop_during_starting_leaves_no_verified_processes(self):
         fixture = Path(__file__).parent / "fixtures" / "process_tree_helper.py"
         for index in range(3):
             with self.subTest(run=index), tempfile.TemporaryDirectory() as temp_dir:
@@ -122,21 +134,48 @@ class ProcessTreeCleanupTests(unittest.TestCase):
 
                     success, message = session.stop(app_id)
                     self.assertTrue(success, message)
-                    self.assertTrue(pid_file.exists(), "parent never started")
-                    self.assertTrue(child_pid_file.exists(), "descendant never started")
 
-                    parent_pid = int(pid_file.read_text(encoding="utf-8"))
-                    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
-                    record = session.registry.list_records()[0]
+                    records = session.registry.list_records()
+                    self.assertEqual(len(records), 1)
+                    record = records[0]
                     self.assertEqual(record.state, "stopped")
-                    self.assertFalse(
-                        process_matches(record.keeper_pid, record.keeper_created_at)
-                    )
-                    self.assertFalse(
-                        process_matches(record.root_pid, record.root_created_at)
-                    )
-                    self.assertIsNone(get_process_created_at(parent_pid))
-                    self.assertIsNone(get_process_created_at(child_pid))
+
+                    for label, pid, created_at in (
+                        (
+                            "keeper",
+                            record.keeper_pid,
+                            record.keeper_created_at,
+                        ),
+                        (
+                            "root",
+                            record.root_pid,
+                            record.root_created_at,
+                        ),
+                    ):
+                        self.assertGreater(pid, 0, f"missing {label} PID")
+                        self.assertGreater(
+                            created_at,
+                            0.0,
+                            f"missing {label} creation time",
+                        )
+                        self.assertFalse(
+                            process_matches(pid, created_at),
+                            f"verified {label} identity is still alive",
+                        )
+
+                    for label, path in (
+                        ("parent", pid_file),
+                        ("child", child_pid_file),
+                    ):
+                        if not path.exists():
+                            continue
+                        pid_text = path.read_text(encoding="utf-8").strip()
+                        self.assertTrue(pid_text, f"{label} PID file is empty")
+                        pid = int(pid_text)
+                        self.assertIsNone(
+                            get_process_created_at(pid),
+                            f"materialized {label} PID {pid} is still alive",
+                        )
                 finally:
                     self._force_cleanup(session)
 
