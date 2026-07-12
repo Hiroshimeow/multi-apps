@@ -1,7 +1,9 @@
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import yaml
 
@@ -9,6 +11,8 @@ from lib.config import ConfigManager
 from lib.ui.app_tools import (
     AppToolAction,
     AppToolActionResult,
+    AppToolService,
+    SystemTerminalAdapter,
     TerminalCommand,
 )
 from lib.ui.log_filter import HighlightRange, LogFilterSpec
@@ -220,6 +224,303 @@ class PhaseOneContractModelTests(unittest.TestCase):
         self.assertEqual(filter_spec.exclusion_terms, ("ignored",))
         self.assertEqual(highlight.length, 5)
         self.assertEqual(snapshot.state, LogSnapshotState.READY)
+
+
+class AppToolServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.workdir = self.root / "workspace with spaces & paren(test) — 日本語"
+        self.workdir.mkdir()
+        self.file_path = self.workdir / "config.yaml"
+        self.file_path.write_text("value: 1\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    @staticmethod
+    def resolver(mapping):
+        return lambda name: mapping.get(name)
+
+    def test_folder_and_file_status_cover_existing_missing_and_wrong_kind_targets(self):
+        service = AppToolService(platform_name="Windows")
+
+        folder_ready = service.folder_status(str(self.workdir))
+        self.assertEqual(
+            folder_ready,
+            AppToolActionResult(
+                True,
+                "READY",
+                f"Open folder: {self.workdir.resolve()}",
+                target=str(self.workdir.resolve()),
+            ),
+        )
+        self.assertEqual(service.folder_status(str(self.file_path)).code, "TARGET_NOT_DIRECTORY")
+        self.assertEqual(service.folder_status(str(self.root / "missing")).code, "TARGET_MISSING")
+
+        action = AppToolAction("config", "open_file", "Open config.yaml", str(self.file_path))
+        file_ready = service.file_status(action)
+        self.assertEqual(
+            file_ready,
+            AppToolActionResult(
+                True,
+                "READY",
+                f"Open file: {self.file_path.resolve()}",
+                target=str(self.file_path.resolve()),
+            ),
+        )
+        self.assertEqual(
+            service.file_status(AppToolAction("dir", "open_file", "Dir", str(self.workdir))).code,
+            "TARGET_NOT_FILE",
+        )
+        self.assertEqual(
+            service.file_status(
+                AppToolAction("missing", "open_file", "Missing", str(self.root / "missing.yaml"))
+            ).code,
+            "TARGET_MISSING",
+        )
+
+    def test_windows_folder_and_file_dispatch_use_exact_startfile_target(self):
+        start_file = MagicMock()
+        service = AppToolService(platform_name="Windows", start_file=start_file)
+
+        folder_result = service.open_folder(str(self.workdir))
+        file_result = service.open_file(
+            AppToolAction("config", "open_file", "Open config", str(self.file_path))
+        )
+
+        self.assertEqual(folder_result.code, "OPENED")
+        self.assertEqual(file_result.code, "OPENED")
+        self.assertEqual(
+            start_file.call_args_list,
+            [
+                unittest.mock.call(str(self.workdir.resolve())),
+                unittest.mock.call(str(self.file_path.resolve())),
+            ],
+        )
+
+    def test_linux_opener_uses_exact_argument_list_and_missing_xdg_open_mapping(self):
+        launcher = MagicMock()
+        service = AppToolService(
+            platform_name="Linux",
+            which=self.resolver({"xdg-open": "/usr/bin/xdg-open"}),
+            process_launcher=launcher,
+        )
+        result = service.open_file(
+            AppToolAction("config", "open_file", "Open config", str(self.file_path))
+        )
+        self.assertEqual(result.code, "OPENED")
+        self.assertEqual(result.argv, ("/usr/bin/xdg-open", str(self.file_path.resolve())))
+        args, kwargs = launcher.call_args
+        self.assertEqual(args[0], ["/usr/bin/xdg-open", str(self.file_path.resolve())])
+        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertTrue(kwargs["start_new_session"])
+        self.assertNotIn("shell", kwargs)
+
+        missing = AppToolService(platform_name="Linux", which=lambda _name: None)
+        target = str(self.file_path.resolve())
+        self.assertEqual(
+            missing.open_file(AppToolAction("config", "open_file", "Open config", target)),
+            AppToolActionResult(
+                False,
+                "LAUNCH_FAILED",
+                "xdg-open is unavailable.",
+                target=target,
+                argv=(),
+            ),
+        )
+
+    def test_unsupported_platform_and_unexpected_tool_type_have_exact_mappings(self):
+        target = str(self.file_path.resolve())
+        unsupported = AppToolService(platform_name="Darwin")
+        self.assertEqual(
+            unsupported.open_folder(str(self.workdir)),
+            AppToolActionResult(
+                False,
+                "UNSUPPORTED_PLATFORM",
+                "App tools are unsupported on platform: Darwin.",
+                target=str(self.workdir.resolve()),
+                argv=(),
+            ),
+        )
+        action = AppToolAction("bad", "command", "Bad", target)
+        self.assertEqual(
+            AppToolService(platform_name="Windows").open_file(action),
+            AppToolActionResult(
+                False,
+                "UNSUPPORTED_TOOL_TYPE",
+                "Unsupported app tool type: command.",
+                target=target,
+                argv=(),
+            ),
+        )
+
+    def test_launch_exceptions_return_structured_failure(self):
+        def fail(*_args, **_kwargs):
+            raise OSError("dispatch failed")
+
+        folder = AppToolService(platform_name="Windows", start_file=fail).open_folder(
+            str(self.workdir)
+        )
+        self.assertFalse(folder.ok)
+        self.assertEqual(folder.code, "LAUNCH_FAILED")
+        self.assertIn("dispatch failed", folder.message)
+
+        adapter = SystemTerminalAdapter(
+            platform_name="Windows",
+            which=self.resolver({"wt.exe": "C:/Windows/wt.exe"}),
+            process_launcher=fail,
+        )
+        terminal = adapter.launch(str(self.workdir))
+        self.assertFalse(terminal.ok)
+        self.assertEqual(terminal.code, "LAUNCH_FAILED")
+        self.assertEqual(
+            terminal.argv,
+            ("C:/Windows/wt.exe", "-d", str(self.workdir.resolve())),
+        )
+
+    def test_windows_terminal_discovery_exact_argv_and_cwd(self):
+        cases = [
+            (
+                {"wt.exe": "C:/Windows/wt.exe", "powershell.exe": "C:/Windows/powershell.exe"},
+                TerminalCommand(
+                    ("C:/Windows/wt.exe", "-d", str(self.workdir.resolve())),
+                    cwd=None,
+                ),
+            ),
+            (
+                {"powershell.exe": "C:/Windows/powershell.exe", "cmd.exe": "C:/Windows/cmd.exe"},
+                TerminalCommand(
+                    ("C:/Windows/powershell.exe", "-NoProfile", "-NoExit"),
+                    cwd=str(self.workdir.resolve()),
+                ),
+            ),
+            (
+                {"cmd.exe": "C:/Windows/cmd.exe"},
+                TerminalCommand(
+                    ("C:/Windows/cmd.exe", "/D", "/K"),
+                    cwd=str(self.workdir.resolve()),
+                ),
+            ),
+        ]
+        for mapping, expected in cases:
+            with self.subTest(mapping=mapping):
+                adapter = SystemTerminalAdapter(
+                    platform_name="Windows",
+                    which=self.resolver(mapping),
+                )
+                self.assertEqual(adapter.discover(str(self.workdir)), expected)
+
+    def test_linux_terminal_environment_generic_and_candidates(self):
+        workdir = str(self.workdir.resolve())
+        env_adapter = SystemTerminalAdapter(
+            platform_name="Linux",
+            environ={"TERMINAL": "kitty --single-instance"},
+            which=self.resolver({"kitty": "/usr/bin/kitty"}),
+        )
+        self.assertEqual(
+            env_adapter.discover(workdir),
+            TerminalCommand(("/usr/bin/kitty", "--single-instance"), cwd=workdir),
+        )
+
+        generic = SystemTerminalAdapter(
+            platform_name="Linux",
+            environ={},
+            which=self.resolver({"x-terminal-emulator": "/usr/bin/x-terminal-emulator"}),
+        )
+        command = generic.discover(workdir)
+        self.assertEqual(command, TerminalCommand(("/usr/bin/x-terminal-emulator",), cwd=workdir))
+        self.assertNotIn("--working-directory", command.argv)
+
+        generic_launcher = MagicMock()
+        generic_launch = SystemTerminalAdapter(
+            platform_name="Linux",
+            environ={},
+            which=self.resolver(
+                {"x-terminal-emulator": "/usr/bin/x-terminal-emulator"}
+            ),
+            process_launcher=generic_launcher,
+        )
+        result = generic_launch.launch(workdir)
+        self.assertEqual(result.code, "TERMINAL_OPENED")
+        args, kwargs = generic_launcher.call_args
+        self.assertEqual(args[0], ["/usr/bin/x-terminal-emulator"])
+        self.assertEqual(kwargs["cwd"], workdir)
+        self.assertNotIn("--working-directory", args[0])
+        self.assertNotIn("shell", kwargs)
+
+        candidate_cases = [
+            ("gnome-terminal", ("/bin/gnome-terminal", "--working-directory", workdir), None),
+            ("konsole", ("/bin/konsole", "--workdir", workdir), None),
+            ("xfce4-terminal", ("/bin/xfce4-terminal", "--working-directory", workdir), None),
+            ("kitty", ("/bin/kitty", "--directory", workdir), None),
+            ("alacritty", ("/bin/alacritty", "--working-directory", workdir), None),
+            ("wezterm", ("/bin/wezterm", "start", "--cwd", workdir), None),
+            ("xterm", ("/bin/xterm",), workdir),
+        ]
+        for name, argv, cwd in candidate_cases:
+            with self.subTest(name=name):
+                adapter = SystemTerminalAdapter(
+                    platform_name="Linux",
+                    environ={},
+                    which=self.resolver({name: f"/bin/{name}"}),
+                )
+                self.assertEqual(adapter.discover(workdir), TerminalCommand(argv, cwd=cwd))
+
+    def test_invalid_terminal_environment_falls_back_and_none_is_unavailable(self):
+        workdir = str(self.workdir.resolve())
+        invalid = SystemTerminalAdapter(
+            platform_name="Linux",
+            environ={"TERMINAL": "'unterminated"},
+            which=self.resolver({"xterm": "/usr/bin/xterm"}),
+        )
+        self.assertEqual(
+            invalid.discover(workdir),
+            TerminalCommand(("/usr/bin/xterm",), cwd=workdir),
+        )
+
+        none = SystemTerminalAdapter(platform_name="Linux", environ={}, which=lambda _name: None)
+        self.assertIsNone(none.discover(workdir))
+        self.assertEqual(
+            none.launch(workdir),
+            AppToolActionResult(
+                False,
+                "TERMINAL_UNAVAILABLE",
+                "No supported terminal was found for this system.",
+                target=workdir,
+                argv=(),
+            ),
+        )
+
+    def test_terminal_launch_preserves_literal_path_and_global_cwd(self):
+        before = os.getcwd()
+        launcher = MagicMock()
+        adapter = SystemTerminalAdapter(
+            platform_name="Windows",
+            which=self.resolver({"powershell.exe": "C:/Windows/powershell.exe"}),
+            process_launcher=launcher,
+        )
+
+        result = adapter.launch(str(self.workdir))
+
+        self.assertEqual(os.getcwd(), before)
+        self.assertEqual(result.code, "TERMINAL_OPENED")
+        self.assertEqual(result.target, str(self.workdir.resolve()))
+        self.assertEqual(
+            result.argv,
+            ("C:/Windows/powershell.exe", "-NoProfile", "-NoExit"),
+        )
+        args, kwargs = launcher.call_args
+        self.assertEqual(args[0], list(result.argv))
+        self.assertEqual(kwargs["cwd"], str(self.workdir.resolve()))
+        self.assertEqual(kwargs["creationflags"], subprocess.CREATE_NEW_CONSOLE)
+        self.assertNotIn("stdin", kwargs)
+        self.assertNotIn("stdout", kwargs)
+        self.assertNotIn("stderr", kwargs)
+        self.assertNotIn("shell", kwargs)
+        self.assertNotIn(str(self.workdir.resolve()), result.argv)
 
 
 if __name__ == "__main__":

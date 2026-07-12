@@ -33,6 +33,7 @@ from PyQt6.QtCore import QTimer, pyqtSignal, Qt, QPoint
 from lib.core import AppController
 from lib.runners.command_runner import CommandRunner
 from lib.runtime.single_instance import SingleInstanceLock
+from lib.ui.app_tools import AppToolAction, AppToolService
 from lib.utils import is_windows, is_linux
 
 
@@ -158,6 +159,7 @@ class AppManager:
         controller,
         app_name,
         startup_auto_start_suppressed_ids=None,
+        tool_service=None,
     ):
         self.controller = controller
         self.name = app_name
@@ -167,6 +169,7 @@ class AppManager:
             if startup_auto_start_suppressed_ids is not None
             else set()
         )
+        self.tool_service = tool_service or AppToolService()
 
     @property
     def app_id(self):
@@ -317,6 +320,35 @@ class AppManager:
         """Return the directory opened when the app name is clicked."""
         return self.controller.get_app_workdir(self.name)
 
+    def get_configured_tools(self):
+        return tuple(
+            AppToolAction(
+                str(tool["id"]),
+                str(tool["type"]),
+                str(tool["label"]),
+                str(tool["path"]),
+            )
+            for tool in self.app_config.get("tools", [])
+        )
+
+    def folder_status(self):
+        return self.tool_service.folder_status(self.get_workdir())
+
+    def terminal_status(self):
+        return self.tool_service.terminal_status(self.get_workdir())
+
+    def open_workdir(self):
+        return self.tool_service.open_folder(self.get_workdir())
+
+    def open_terminal(self):
+        return self.tool_service.open_terminal(self.get_workdir())
+
+    def file_status(self, action):
+        return self.tool_service.file_status(action)
+
+    def open_configured_tool(self, action):
+        return self.tool_service.open_file(action)
+
     def get_log_path(self, stream):
         """Return the newest active, otherwise newest historical, run log path."""
         status_info = self.get_status_info()
@@ -371,14 +403,44 @@ class AppManager:
 # ==========================================
 
 
-class ClickableLabel(QLabel):
-    """A QLabel subclass that emits a signal when clicked."""
+class AppNameLabel(QLabel):
+    """App label with distinct folder and context-tool input signals."""
 
-    clicked = pyqtSignal()
+    left_clicked = pyqtSignal()
+    context_requested = pyqtSignal(QPoint)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def mousePressEvent(self, event):
-        self.clicked.emit()
-        super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.left_clicked.emit()
+            super().mousePressEvent(event)
+            return
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
+        event.accept()
+
+    def contextMenuEvent(self, event):
+        self.context_requested.emit(event.globalPos())
+        event.accept()
+
+    def keyPressEvent(self, event):
+        is_menu_key = event.key() == Qt.Key.Key_Menu
+        is_shift_f10 = (
+            event.key() == Qt.Key.Key_F10
+            and bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        )
+        if is_menu_key or is_shift_f10:
+            self.context_requested.emit(self.mapToGlobal(self.rect().bottomLeft()))
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class HoverLogButton(QPushButton):
@@ -458,10 +520,12 @@ class LiveLogPreview(QLabel):
 class AppControlWidget(QWidget):
     """Compact launcher row with app identity, status, and actions."""
 
-    def __init__(self, manager, parent_menu):
+    def __init__(self, manager, parent_menu, result_notifier=None):
         super().__init__()
         self.manager = manager
         self.parent_menu = parent_menu
+        self.result_notifier = result_notifier
+        self._app_context_menu = None
 
         layout = QHBoxLayout()
         layout.setContentsMargins(10, 5, 10, 5)
@@ -477,14 +541,17 @@ class AppControlWidget(QWidget):
         name_layout.setContentsMargins(0, 0, 0, 0)
         name_layout.setSpacing(1)
 
-        self.lbl_name = ClickableLabel(manager.name)
+        self.lbl_name = AppNameLabel(manager.name)
         self.lbl_name.setTextFormat(Qt.TextFormat.PlainText)
         name_font = self.lbl_name.font()
         name_font.setBold(True)
         self.lbl_name.setFont(name_font)
-        self.lbl_name.clicked.connect(self.on_name_clicked)
+        self.lbl_name.left_clicked.connect(self.on_name_clicked)
+        self.lbl_name.context_requested.connect(self.show_app_context_menu)
         self.lbl_name.setToolTip(
-            f"{manager.name}\nClick to open application working directory"
+            f"{manager.name}\n"
+            "Left-click to open the application working directory.\n"
+            "Right-click or press the context-menu key to open app tools."
         )
         name_minimum = self.lbl_name.fontMetrics().horizontalAdvance(manager.name) + 8
         self.lbl_name.setMinimumWidth(name_minimum)
@@ -599,16 +666,83 @@ class AppControlWidget(QWidget):
         self.manager.stop_all()
         self.update_ui()
 
+    def _notify_result(self, result):
+        if not result.ok and self.result_notifier is not None:
+            self.result_notifier(self.manager.name, result)
+
     def on_name_clicked(self):
-        """Open the same working directory used when launching the app."""
-        workdir = self.manager.get_workdir() or os.getcwd()
-        if os.path.exists(workdir):
-            if is_windows():
-                os.startfile(workdir)
-            else:
-                subprocess.Popen(["xdg-open", workdir])
+        """Open the configured working directory through the app-tool service."""
+        self._notify_result(self.manager.open_workdir())
+
+    def _add_context_action(self, menu, text, status, callback):
+        action = QAction(text, menu)
+        action.setToolTip(status.message)
+        action.setEnabled(status.ok)
+        if status.ok:
+            action.triggered.connect(
+                lambda _checked=False, handler=callback: self._notify_result(handler())
+            )
+        menu.addAction(action)
+        return action
+
+    def build_app_context_menu(self):
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        self._add_context_action(
+            menu,
+            "Open folder",
+            self.manager.folder_status(),
+            self.manager.open_workdir,
+        )
+        self._add_context_action(
+            menu,
+            "Open terminal here",
+            self.manager.terminal_status(),
+            self.manager.open_terminal,
+        )
+        tools = self.manager.get_configured_tools()
+        if tools:
+            menu.addSeparator()
+        for tool in tools:
+            self._add_context_action(
+                menu,
+                tool.label,
+                self.manager.file_status(tool),
+                lambda selected=tool: self.manager.open_configured_tool(selected),
+            )
+        return menu
+
+    @staticmethod
+    def _bounded_menu_position(menu, requested):
+        menu.ensurePolished()
+        size = menu.sizeHint()
+        screen = QGuiApplication.screenAt(requested) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return requested
+        bounds = screen.availableGeometry()
+        x = min(max(requested.x(), bounds.left()), bounds.right() - size.width() + 1)
+        y = min(max(requested.y(), bounds.top()), bounds.bottom() - size.height() + 1)
+        return QPoint(x, y)
+
+    def _release_app_context_menu(self, menu):
+        if self._app_context_menu is menu:
+            self._app_context_menu = None
+        menu.deleteLater()
+
+    def show_app_context_menu(self, global_pos):
+        if self._app_context_menu is not None:
+            self._app_context_menu.close()
+        menu = self.build_app_context_menu()
+        self._app_context_menu = menu
+        menu.aboutToHide.connect(
+            lambda current=menu: self._release_app_context_menu(current)
+        )
+        menu.popup(self._bounded_menu_position(menu, global_pos))
+        return menu
 
     def hideEvent(self, event):
+        if self._app_context_menu is not None:
+            self._app_context_menu.close()
         self.output_log_preview.hide_preview()
         self.error_log_preview.hide_preview()
         super().hideEvent(event)
@@ -636,6 +770,7 @@ class SystemTrayApp(QSystemTrayIcon):
         self.launcher_argv = tuple(launcher_argv)
         self.managers = []
         self.controller = None
+        self.tool_service = AppToolService()
         self.startup_auto_start_suppressed_ids = set()
         self.instance_lock = instance_lock
         self._restart_requested = False
@@ -677,6 +812,10 @@ class SystemTrayApp(QSystemTrayIcon):
     def load_config(self):
         # Initialize AppController with the selected launcher config.
         self.controller = AppController(self.config_path)
+        tool_service = getattr(self, "tool_service", None)
+        if tool_service is None:
+            tool_service = AppToolService()
+            self.tool_service = tool_service
 
         # Get all apps
         apps = self.controller.list_apps()
@@ -712,6 +851,7 @@ class SystemTrayApp(QSystemTrayIcon):
                 self.controller,
                 app["name"],
                 self.startup_auto_start_suppressed_ids,
+                tool_service,
             )
             self.managers.append(mgr)
 
@@ -734,7 +874,11 @@ class SystemTrayApp(QSystemTrayIcon):
         else:
             for mgr in self.managers:
                 action = QWidgetAction(self.menu)
-                widget = AppControlWidget(mgr, self.menu)
+                widget = AppControlWidget(
+                    mgr,
+                    self.menu,
+                    getattr(self, "notify_app_tool_failure", None),
+                )
                 action.setDefaultWidget(widget)
                 self.menu.addAction(action)
                 row_minimum_width = max(
@@ -801,6 +945,14 @@ class SystemTrayApp(QSystemTrayIcon):
     def stop_all_apps(self):
         if self.controller:
             self.controller.stop_all()
+
+    def notify_app_tool_failure(self, app_name, result):
+        self.showMessage(
+            "App tool failed",
+            f"{app_name}: {result.message}",
+            QSystemTrayIcon.MessageIcon.Warning,
+            5000,
+        )
 
     def _capture_launcher_ui_activity(self):
         snapshot = {"auto_start": None, "menu_timers": []}
