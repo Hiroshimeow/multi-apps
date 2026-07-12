@@ -8,6 +8,8 @@
 import sys
 import os
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
@@ -32,6 +34,46 @@ from lib.core import AppController
 from lib.runners.command_runner import CommandRunner
 from lib.runtime.single_instance import SingleInstanceLock
 from lib.utils import is_windows, is_linux
+
+
+@dataclass(frozen=True, slots=True)
+class LauncherArgs:
+    config_path: str
+    qt_argv: tuple[str, ...]
+    launcher_argv: tuple[str, ...]
+
+
+def parse_launcher_args(argv):
+    """Extract launcher-owned arguments while preserving all Qt arguments."""
+    values = [str(value) for value in argv] or ["multi.py"]
+    program = values[0]
+    qt_argv = [program]
+    config_value = "setting.yaml"
+
+    index = 1
+    while index < len(values):
+        value = values[index]
+        if value == "--config":
+            index += 1
+            if index >= len(values):
+                raise ValueError("--config requires a path")
+            config_value = values[index]
+        elif value.startswith("--config="):
+            config_value = value.split("=", 1)[1]
+            if not config_value:
+                raise ValueError("--config requires a path")
+        else:
+            qt_argv.append(value)
+        index += 1
+
+    config_path = str(Path(config_value).expanduser().resolve(strict=False))
+    launcher_argv = (program, "--config", config_path, *qt_argv[1:])
+    return LauncherArgs(
+        config_path=config_path,
+        qt_argv=tuple(qt_argv),
+        launcher_argv=tuple(launcher_argv),
+    )
+
 
 # ==========================================
 # 1. WRAPPERS
@@ -573,8 +615,25 @@ class AppControlWidget(QWidget):
 
 
 class SystemTrayApp(QSystemTrayIcon):
-    def __init__(self, icon, parent=None, instance_lock=None):
+    def __init__(
+        self,
+        icon,
+        parent=None,
+        instance_lock=None,
+        config_path="setting.yaml",
+        launcher_argv=None,
+    ):
         super().__init__(icon, parent)
+        self.config_path = str(Path(config_path).expanduser().resolve(strict=False))
+        if launcher_argv is None:
+            parsed = parse_launcher_args(sys.argv)
+            launcher_argv = (
+                parsed.qt_argv[0],
+                "--config",
+                self.config_path,
+                *parsed.qt_argv[1:],
+            )
+        self.launcher_argv = tuple(launcher_argv)
         self.managers = []
         self.controller = None
         self.startup_auto_start_suppressed_ids = set()
@@ -616,9 +675,8 @@ class SystemTrayApp(QSystemTrayIcon):
                 suppressed_ids.clear()
 
     def load_config(self):
-        # Initialize AppController
-        # It handles loading setting.yaml
-        self.controller = AppController("setting.yaml")
+        # Initialize AppController with the selected launcher config.
+        self.controller = AppController(self.config_path)
 
         # Get all apps
         apps = self.controller.list_apps()
@@ -789,7 +847,8 @@ class SystemTrayApp(QSystemTrayIcon):
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         else:
             kwargs["start_new_session"] = True
-        return subprocess.Popen([sys.executable] + sys.argv, **kwargs)
+        launcher_argv = getattr(self, "launcher_argv", tuple(sys.argv))
+        return subprocess.Popen([sys.executable] + list(launcher_argv), **kwargs)
 
     def restart_app(self):
         if self._restart_requested:
@@ -834,7 +893,13 @@ class SystemTrayApp(QSystemTrayIcon):
 
 
 def main():
-    app = QApplication(sys.argv)
+    try:
+        launcher_args = parse_launcher_args(sys.argv)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        return 2
+
+    app = QApplication(list(launcher_args.qt_argv))
     app.setQuitOnLastWindowClosed(
         False
     )  # Important: Do not exit when window is closed (since we have no window)
@@ -857,7 +922,12 @@ def main():
         # Fallback system icon
         icon = app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon)
 
-    tray = SystemTrayApp(icon, instance_lock=instance_lock)
+    tray = SystemTrayApp(
+        icon,
+        instance_lock=instance_lock,
+        config_path=launcher_args.config_path,
+        launcher_argv=launcher_args.launcher_argv,
+    )
     tray.show()
 
     # Start Toast

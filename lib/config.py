@@ -2,6 +2,8 @@ import os
 import re
 import unicodedata
 from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -15,6 +17,15 @@ DEFAULT_GLOBAL_CONFIG = {
     "multi_run": False,
 }
 DEFAULT_CLOSE_TIMEOUT = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigWarning:
+    code: str
+    app_id: str | None
+    app_name: str | None
+    tool_index: int | None
+    detail: str | None = None
 
 
 def slugify_app_id(value: str) -> str:
@@ -33,9 +44,11 @@ class ConfigManager:
         self.config_path = os.path.abspath(resolve_path(config_path) or config_path)
         self.config_dir = os.path.dirname(self.config_path)
         self.config = {}
+        self.warnings: list[ConfigWarning] = []
         self.load()
 
     def load(self):
+        self.warnings = []
         if not os.path.exists(self.config_path):
             print_warning(f"Config file not found: {self.config_path}")
             self.config = self._empty_config()
@@ -94,6 +107,12 @@ class ConfigManager:
         raw_id = str(raw_app.get("id") or "").strip()
         app_id = raw_id or slugify_app_id(name)
         path = resolve_path(raw_app.get("path") or self.config_dir, self.config_dir)
+        tools = self._normalize_tools(
+            raw_app.get("tools"),
+            app_id=app_id,
+            app_name=safe_name,
+            workdir=path,
+        )
 
         raw_args = raw_app.get("args") or []
         if isinstance(raw_args, str):
@@ -127,7 +146,160 @@ class ConfigManager:
             "args_edit": bool(raw_app.get("args_edit", False)),
             "close_timeout": close_timeout,
             "os": raw_app.get("os"),
+            "tools": tools,
         }
+
+    def _record_tool_warning(
+        self,
+        code: str,
+        *,
+        app_id: str,
+        app_name: str,
+        tool_index: int | None,
+        detail: str | None = None,
+        message: str,
+    ) -> None:
+        self.warnings.append(
+            ConfigWarning(
+                code=code,
+                app_id=app_id,
+                app_name=app_name,
+                tool_index=tool_index,
+                detail=detail,
+            )
+        )
+        print_warning(message)
+
+    def _normalize_tools(
+        self,
+        raw_tools: Any,
+        *,
+        app_id: str,
+        app_name: str,
+        workdir: str,
+    ) -> list[dict[str, str]]:
+        if raw_tools is None:
+            return []
+        if not isinstance(raw_tools, list):
+            self._record_tool_warning(
+                "TOOLS_INVALID_CONTAINER",
+                app_id=app_id,
+                app_name=app_name,
+                tool_index=None,
+                message=f"Ignoring tools for '{app_name}': expected a list.",
+            )
+            return []
+
+        normalized: list[dict[str, str]] = []
+        seen_ids: set[str] = set()
+        for index, raw_tool in enumerate(raw_tools):
+            if not isinstance(raw_tool, dict):
+                self._record_tool_warning(
+                    "TOOL_INVALID_ENTRY",
+                    app_id=app_id,
+                    app_name=app_name,
+                    tool_index=index,
+                    message=f"Ignoring tool {index} for '{app_name}': expected a mapping.",
+                )
+                continue
+
+            raw_type = raw_tool.get("type")
+            tool_type = str(raw_type or "").strip().lower()
+            if not tool_type:
+                self._record_tool_warning(
+                    "TOOL_MISSING_TYPE",
+                    app_id=app_id,
+                    app_name=app_name,
+                    tool_index=index,
+                    message=f"Ignoring tool {index} for '{app_name}': type is required.",
+                )
+                continue
+            if tool_type != "open_file":
+                self._record_tool_warning(
+                    "TOOL_UNKNOWN_TYPE",
+                    app_id=app_id,
+                    app_name=app_name,
+                    tool_index=index,
+                    detail=tool_type,
+                    message=(
+                        f"Ignoring tool {index} for '{app_name}': "
+                        f"unknown type '{tool_type}'."
+                    ),
+                )
+                continue
+
+            label = str(raw_tool.get("label") or "").strip()
+            if not label:
+                self._record_tool_warning(
+                    "TOOL_EMPTY_LABEL",
+                    app_id=app_id,
+                    app_name=app_name,
+                    tool_index=index,
+                    message=f"Ignoring tool {index} for '{app_name}': label is required.",
+                )
+                continue
+
+            raw_path = str(raw_tool.get("path") or "").strip()
+            if not raw_path:
+                self._record_tool_warning(
+                    "TOOL_EMPTY_PATH",
+                    app_id=app_id,
+                    app_name=app_name,
+                    tool_index=index,
+                    message=f"Ignoring tool {index} for '{app_name}': path is required.",
+                )
+                continue
+
+            raw_id = raw_tool.get("id")
+            if raw_id is None or (isinstance(raw_id, str) and not raw_id.strip()):
+                tool_id = f"{tool_type}-{slugify_app_id(label)}"
+            elif isinstance(raw_id, str):
+                tool_id = raw_id.strip()
+            else:
+                detail = f"{type(raw_id).__name__}: {raw_id!r}"
+                self._record_tool_warning(
+                    "TOOL_INVALID_ID",
+                    app_id=app_id,
+                    app_name=app_name,
+                    tool_index=index,
+                    detail=detail,
+                    message=(
+                        f"Ignoring tool {index} for '{app_name}': "
+                        f"id must be a string ({detail})."
+                    ),
+                )
+                continue
+
+            if tool_id in seen_ids:
+                self._record_tool_warning(
+                    "TOOL_DUPLICATE_ID",
+                    app_id=app_id,
+                    app_name=app_name,
+                    tool_index=index,
+                    detail=tool_id,
+                    message=(
+                        f"Ignoring tool {index} for '{app_name}': "
+                        f"duplicate id '{tool_id}'."
+                    ),
+                )
+                continue
+
+            expanded = Path(os.path.expanduser(raw_path))
+            if not expanded.is_absolute():
+                expanded = Path(workdir) / expanded
+            resolved_path = str(expanded.resolve(strict=False))
+
+            seen_ids.add(tool_id)
+            normalized.append(
+                {
+                    "id": tool_id,
+                    "type": tool_type,
+                    "label": label,
+                    "path": resolved_path,
+                }
+            )
+
+        return normalized
 
     def get_global(self, key, default=None):
         return self.config.get("global", {}).get(key, default)
