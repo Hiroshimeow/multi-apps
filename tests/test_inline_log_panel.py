@@ -407,6 +407,28 @@ class InlineLogPanelCoordinatorTests(unittest.TestCase):
         self.assertFalse(coordinator.hide_timer.isActive())
         self.assertFalse(second.inline_log_panel.isVisible())
 
+    def test_same_stream_reentry_does_not_reemit_visibility_or_reread_log(self):
+        row = self.make_row(
+            "one",
+            [ready_snapshot("first"), ready_snapshot("unexpected second read")],
+        )
+        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=1000, hide_delay_ms=30)
+        visibility_changed = MagicMock()
+        coordinator.panel_visibility_changed.connect(visibility_changed)
+
+        coordinator.request_open(row, "stdout")
+        visibility_changed.reset_mock()
+        initial_reads = row.manager.get_log_snapshot.call_count
+
+        coordinator.request_open(row, "stdout")
+
+        visibility_changed.assert_not_called()
+        self.assertEqual(row.manager.get_log_snapshot.call_count, initial_reads)
+        self.assertIs(coordinator.current_row, row)
+        self.assertEqual(coordinator.current_stream, "stdout")
+        self.assertTrue(coordinator.refresh_timer.isActive())
+        coordinator.shutdown()
+
     def test_delayed_hide_cancel_and_focus_keep_open(self):
         row = self.make_row("one", [ready_snapshot("one")])
         coordinator = InlineLogPanelCoordinator(refresh_interval_ms=1000, hide_delay_ms=30)

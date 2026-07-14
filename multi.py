@@ -902,6 +902,15 @@ class SystemTrayApp(QSystemTrayIcon):
             )
 
     def _resize_menu_for_inline_panel(self):
+        if getattr(self, "_inline_menu_resize_in_progress", False):
+            return
+        self._inline_menu_resize_in_progress = True
+        try:
+            SystemTrayApp._resize_menu_for_inline_panel_once(self)
+        finally:
+            self._inline_menu_resize_in_progress = False
+
+    def _resize_menu_for_inline_panel_once(self):
         menu = self.menu
         menu.ensurePolished()
 

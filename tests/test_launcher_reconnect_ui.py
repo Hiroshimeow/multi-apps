@@ -605,6 +605,59 @@ class RecoveredUiStateTests(unittest.TestCase):
             menu.deleteLater()
             QApplication.processEvents()
 
+    def test_menu_resize_ignores_reentrant_action_invalidation(self):
+        class ReentrantMenu(QMenu):
+            def __init__(self):
+                super().__init__()
+                self.reenter = None
+                self.insert_depth = 0
+                self.max_insert_depth = 0
+                self.did_reenter = False
+
+            def insertAction(self, before, action):
+                self.insert_depth += 1
+                self.max_insert_depth = max(self.max_insert_depth, self.insert_depth)
+                try:
+                    result = super().insertAction(before, action)
+                    if self.reenter is not None and not self.did_reenter:
+                        self.did_reenter = True
+                        self.reenter()
+                    return result
+                finally:
+                    self.insert_depth -= 1
+
+        manager = self._manager({"status": "STOPPED", "instances": 0})
+        menu = ReentrantMenu()
+        tray = SimpleNamespace(
+            menu=menu,
+            managers=[manager],
+            refresh_all=lambda: None,
+            stop_all_apps=lambda: None,
+            restart_app=lambda: None,
+            exit_app=lambda: None,
+            _menu_generation=0,
+        )
+        try:
+            SystemTrayApp.refresh_menu(tray)
+            row = menu.findChild(AppControlWidget)
+            menu.popup(QPoint(100, 100))
+            QApplication.processEvents()
+            menu.reenter = lambda: SystemTrayApp._resize_menu_for_inline_panel(tray)
+
+            tray.log_coordinator.request_open(row, "stdout")
+            QApplication.processEvents()
+
+            self.assertTrue(row.inline_log_panel.isVisible())
+            self.assertEqual(menu.max_insert_depth, 1)
+            self.assertFalse(getattr(tray, "_inline_menu_resize_in_progress", False))
+        finally:
+            tray.log_coordinator.shutdown()
+            for widget in menu.findChildren(AppControlWidget):
+                self._dispose_widget(widget)
+            menu.close()
+            menu.deleteLater()
+            QApplication.processEvents()
+
     def test_menu_minimum_width_tracks_embedded_row_size_hint(self):
         manager = self._manager(
             {"status": "STOPPED", "instances": 0},

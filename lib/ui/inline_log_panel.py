@@ -617,6 +617,10 @@ class InlineLogPanelCoordinator(QObject):
         self.hide_timer.stop()
         same_row = row is self.current_row
         same_stream = same_row and stream == self.current_stream
+        if same_stream:
+            self._button_hovered = True
+            self.refresh_timer.start()
+            return
         if self.current_row is not None and not same_row:
             self.current_row.inline_log_panel.hide()
             self.current_row.inline_log_panel.reset()
