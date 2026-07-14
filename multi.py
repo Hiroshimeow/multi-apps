@@ -26,8 +26,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QSizePolicy,
 )
-from PyQt6.QtGui import QIcon, QAction, QFont, QGuiApplication
-from PyQt6.QtCore import QTimer, pyqtSignal, Qt, QPoint
+from PyQt6.QtGui import QIcon, QAction, QGuiApplication
+from PyQt6.QtCore import QEvent, QTimer, pyqtSignal, Qt, QPoint, QRect, QSize
 
 # Import from modular library
 from lib.core import AppController
@@ -39,6 +39,13 @@ from lib.ui.log_reader import (
     DEFAULT_MAX_BYTES,
     DEFAULT_TAIL_LINES,
     LogSnapshotState,
+)
+from lib.ui.inline_log_panel import (
+    InlineLogPanel,
+    InlineLogPanelCoordinator,
+    NativeScrollableMenuStyle,
+    PANEL_PREFERRED_HEIGHT,
+    compute_inline_menu_geometry,
 )
 from lib.utils import is_windows, is_linux
 
@@ -468,81 +475,34 @@ class HoverLogButton(QPushButton):
         super().leaveEvent(event)
 
 
-class LiveLogPreview(QLabel):
-    """Tooltip-like live preview for the last few lines of one log file."""
-
-    def __init__(self, anchor, title, content_provider, parent=None):
-        super().__init__(parent, Qt.WindowType.ToolTip)
-        self.anchor = anchor
-        self.title = title
-        self.content_provider = content_provider
-        self.setTextFormat(Qt.TextFormat.PlainText)
-        self.setFont(QFont("Consolas", 9))
-        self.setMargin(9)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setStyleSheet(
-            "QLabel {"
-            " background: #171717; color: #e8e8e8;"
-            " border: 1px solid #5c5c5c; border-radius: 5px;"
-            " padding: 3px;"
-            "}"
-        )
-
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.setInterval(500)
-        self.refresh_timer.timeout.connect(self.refresh_content)
-
-    def show_preview(self):
-        self.refresh_content()
-        self._position_near_anchor()
-        self.show()
-        self.raise_()
-        self.refresh_timer.start()
-
-    def hide_preview(self):
-        self.refresh_timer.stop()
-        self.hide()
-
-    def refresh_content(self):
-        body = self.content_provider()
-        self.setText(f"{self.title}\n{'-' * 72}\n{body}")
-        self.adjustSize()
-        if self.isVisible():
-            self._position_near_anchor()
-
-    def _position_near_anchor(self):
-        anchor_pos = self.anchor.mapToGlobal(QPoint(0, self.anchor.height() + 5))
-        screen = QGuiApplication.screenAt(anchor_pos)
-        if screen is None:
-            screen = QGuiApplication.primaryScreen()
-
-        x = anchor_pos.x()
-        y = anchor_pos.y()
-        if screen is not None:
-            bounds = screen.availableGeometry()
-            x = min(max(x, bounds.left()), bounds.right() - self.width())
-            if y + self.height() > bounds.bottom():
-                y = self.anchor.mapToGlobal(QPoint(0, -self.height() - 5)).y()
-            y = min(max(y, bounds.top()), bounds.bottom() - self.height())
-        self.move(x, y)
-
-
 class AppControlWidget(QWidget):
-    """Compact launcher row with app identity, status, and actions."""
+    """Launcher row with existing controls and one hidden inline log panel."""
 
-    def __init__(self, manager, parent_menu, result_notifier=None):
+    def __init__(
+        self,
+        manager,
+        parent_menu,
+        result_notifier=None,
+        coordinator=None,
+    ):
         super().__init__()
         self.manager = manager
         self.parent_menu = parent_menu
         self.result_notifier = result_notifier
         self._app_context_menu = None
+        self.log_coordinator = coordinator or InlineLogPanelCoordinator(parent_menu)
+        self._owns_log_coordinator = coordinator is None
 
-        layout = QHBoxLayout()
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self.top_row = QWidget(self)
+        layout = QHBoxLayout(self.top_row)
         layout.setContentsMargins(10, 5, 10, 5)
         layout.setSpacing(10)
 
-        # App identity: full name plus a small managed root-PID subtitle.
-        self.name_container = QWidget(self)
+        self.name_container = QWidget(self.top_row)
         self.name_container.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Preferred,
@@ -563,9 +523,12 @@ class AppControlWidget(QWidget):
             "Left-click to open the application working directory.\n"
             "Right-click or press the context-menu key to open app tools."
         )
-        name_minimum = self.lbl_name.fontMetrics().horizontalAdvance(manager.name) + 8
-        self.lbl_name.setMinimumWidth(name_minimum)
-        self.name_container.setMinimumWidth(name_minimum)
+        self.lbl_name.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.lbl_name.setMinimumWidth(96)
+        self.name_container.setMinimumWidth(96)
 
         self.lbl_pid = QLabel("PID: -")
         pid_font = self.lbl_pid.font()
@@ -576,7 +539,6 @@ class AppControlWidget(QWidget):
         name_layout.addWidget(self.lbl_name)
         name_layout.addWidget(self.lbl_pid)
 
-        # Primary status: elapsed-only for running, terminal update time for stopped.
         self.lbl_status = QLabel()
         timestamp_width = self.lbl_status.fontMetrics().horizontalAdvance(
             "2000-00-00 00:00:00"
@@ -591,13 +553,12 @@ class AppControlWidget(QWidget):
         self.btn_stop.setToolTip(f"Stop {manager.name}")
         self.btn_stop.clicked.connect(self.on_stop)
 
-        # Hover remains available for active and historical stopped-run logs.
         self.btn_ologs = HoverLogButton("O.Logs")
-        self.btn_ologs.setToolTip("Open output log; hover to preview")
+        self.btn_ologs.setToolTip("Open output log; hover to show inline live log")
         self.btn_ologs.clicked.connect(self.manager.view_output_log)
 
         self.btn_elogs = HoverLogButton("E.Logs")
-        self.btn_elogs.setToolTip("Open error log; hover to preview")
+        self.btn_elogs.setToolTip("Open error log; hover to show inline live log")
         self.btn_elogs.clicked.connect(self.manager.view_error_log)
 
         for button in (
@@ -608,23 +569,6 @@ class AppControlWidget(QWidget):
         ):
             self._fit_button_to_caption(button)
 
-        self.output_log_preview = LiveLogPreview(
-            self.btn_ologs,
-            f"{manager.name} - output log (last 7 lines)",
-            lambda: self.manager.read_log_tail("out"),
-            self,
-        )
-        self.error_log_preview = LiveLogPreview(
-            self.btn_elogs,
-            f"{manager.name} - error log (last 7 lines)",
-            lambda: self.manager.read_log_tail("err"),
-            self,
-        )
-        self.btn_ologs.hover_entered.connect(self.output_log_preview.show_preview)
-        self.btn_ologs.hover_left.connect(self.output_log_preview.hide_preview)
-        self.btn_elogs.hover_entered.connect(self.error_log_preview.show_preview)
-        self.btn_elogs.hover_left.connect(self.error_log_preview.hide_preview)
-
         layout.addWidget(self.name_container)
         layout.addWidget(self.lbl_status)
         layout.addWidget(self.btn_start)
@@ -633,15 +577,29 @@ class AppControlWidget(QWidget):
         layout.addWidget(self.btn_elogs)
         layout.setStretch(0, 1)
 
-        self.setLayout(layout)
-        layout.activate()
-        self.setMinimumWidth(self.sizeHint().width())
+        self.inline_log_panel = InlineLogPanel(self)
+        root_layout.addWidget(self.top_row)
+        root_layout.addWidget(self.inline_log_panel)
+        self.log_coordinator.register_row(self)
+        self.btn_ologs.hover_entered.connect(
+            lambda: self.log_coordinator.button_entered(self, "stdout")
+        )
+        self.btn_ologs.hover_left.connect(
+            lambda: self.log_coordinator.button_left(self, "stdout")
+        )
+        self.btn_elogs.hover_entered.connect(
+            lambda: self.log_coordinator.button_entered(self, "stderr")
+        )
+        self.btn_elogs.hover_left.connect(
+            lambda: self.log_coordinator.button_left(self, "stderr")
+        )
 
-        # Timer update status UI realtime
+        root_layout.activate()
+        self.setMinimumWidth(max(self.top_row.sizeHint().width(), 520))
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_ui)
         self.timer.start(1000)
-
         self.update_ui()
 
     @staticmethod
@@ -753,8 +711,6 @@ class AppControlWidget(QWidget):
     def hideEvent(self, event):
         if self._app_context_menu is not None:
             self._app_context_menu.close()
-        self.output_log_preview.hide_preview()
-        self.error_log_preview.hide_preview()
         super().hideEvent(event)
 
 
@@ -866,8 +822,31 @@ class SystemTrayApp(QSystemTrayIcon):
             self.managers.append(mgr)
 
     def refresh_menu(self):
+        old_coordinator = getattr(self, "log_coordinator", None)
+        if old_coordinator is not None:
+            old_coordinator.shutdown()
+            old_coordinator.deleteLater()
+        self._menu_generation = getattr(self, "_menu_generation", 0) + 1
+
+        if not hasattr(self.menu, "_native_scroll_style"):
+            self.menu._native_scroll_style = NativeScrollableMenuStyle()
+            self.menu._native_scroll_style.setParent(self.menu)
+            self.menu.setStyle(self.menu._native_scroll_style)
+
         self.menu.clear()
         self.menu.setMinimumWidth(0)
+        self.menu.setMaximumWidth(16777215)
+        self.menu.setMaximumHeight(16777215)
+        self.log_coordinator = InlineLogPanelCoordinator(
+            self.menu,
+            generation=self._menu_generation,
+        )
+        self.log_coordinator.panel_visibility_changed.connect(
+            lambda _visible, current=self: SystemTrayApp._resize_menu_for_inline_panel(
+                current
+            )
+        )
+        self.menu.aboutToHide.connect(self.log_coordinator.close_for_menu_hide)
         row_minimum_width = 0
 
         # Header
@@ -888,6 +867,7 @@ class SystemTrayApp(QSystemTrayIcon):
                     mgr,
                     self.menu,
                     getattr(self, "notify_app_tool_failure", None),
+                    self.log_coordinator,
                 )
                 action.setDefaultWidget(widget)
                 self.menu.addAction(action)
@@ -920,6 +900,84 @@ class SystemTrayApp(QSystemTrayIcon):
             self.menu.setMinimumWidth(
                 max(self.menu.minimumSizeHint().width(), row_minimum_width + 8)
             )
+
+    def _resize_menu_for_inline_panel(self):
+        menu = self.menu
+        menu.ensurePolished()
+
+        def invalidate_widget_actions():
+            coordinator = getattr(self, "log_coordinator", None)
+            current_row = (
+                coordinator.current_row if coordinator is not None else None
+            )
+            if current_row is not None:
+                actions = menu.actions()
+                current_action = next(
+                    (
+                        action
+                        for action in actions
+                        if isinstance(action, QWidgetAction)
+                        and action.defaultWidget() is current_row
+                    ),
+                    None,
+                )
+                if current_action is not None:
+                    index = actions.index(current_action)
+                    before = actions[index + 1] if index + 1 < len(actions) else None
+                    menu.removeAction(current_action)
+                    menu.insertAction(before, current_action)
+
+            widget_actions = [
+                action
+                for action in menu.actions()
+                if isinstance(action, QWidgetAction)
+                and action.defaultWidget() is not None
+            ]
+            for action in widget_actions:
+                action.defaultWidget().updateGeometry()
+            QApplication.sendEvent(menu, QEvent(QEvent.Type.LayoutRequest))
+            for action in widget_actions:
+                action.changed.emit()
+            menu_layout = menu.layout()
+            if menu_layout is not None:
+                menu_layout.activate()
+
+        invalidate_widget_actions()
+        menu.adjustSize()
+        screen = QGuiApplication.screenAt(menu.frameGeometry().center())
+        if screen is None and hasattr(menu, "screen"):
+            screen = menu.screen()
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+
+        panel = None
+        coordinator = getattr(self, "log_coordinator", None)
+        if coordinator is not None and coordinator.current_row is not None:
+            panel = coordinator.current_row.inline_log_panel
+        panel_height = panel.height() if panel is not None and panel.isVisible() else 0
+        natural = menu.sizeHint()
+        base_height = max(1, natural.height() - panel_height)
+        anchor = menu.frameGeometry()
+        if anchor.isNull():
+            anchor = QRect(screen.availableGeometry().bottomRight(), QSize(1, 1))
+        geometry = compute_inline_menu_geometry(
+            base_menu_size=QSize(natural.width(), base_height),
+            content_width=max(menu.minimumWidth(), natural.width()),
+            desired_panel_height=PANEL_PREFERRED_HEIGHT,
+            available_geometry=screen.availableGeometry(),
+            anchor_rect=anchor,
+        )
+        if panel is not None:
+            panel.setPreferredHeight(geometry.panel_height)
+        menu.setMaximumWidth(geometry.width_cap)
+        menu.setMaximumHeight(geometry.height_cap)
+        invalidate_widget_actions()
+        menu.adjustSize()
+        if menu.isVisible():
+            menu.setGeometry(geometry.menu_rect)
+        self._last_inline_menu_geometry = geometry
 
     def refresh_all(self):
         """Reload config and refresh menu."""

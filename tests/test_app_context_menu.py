@@ -12,6 +12,8 @@ from PyQt6.QtTest import QSignalSpy, QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from lib.ui.app_tools import AppToolAction, AppToolActionResult
+from lib.ui.inline_log_panel import InlineLogPanel, InlineLogPanelCoordinator
+from lib.ui.log_reader import LogSnapshot, LogSnapshotState
 from multi import AppControlWidget, AppNameLabel, SystemTrayApp
 
 
@@ -95,6 +97,13 @@ class AppContextMenuTests(unittest.TestCase):
             "tooltip": "Last run PID unavailable",
         }
         manager.read_log_tail.return_value = "log"
+        manager.get_log_snapshot.return_value = LogSnapshot(
+            "C:/work/demo.out.log",
+            LogSnapshotState.READY,
+            lines=("log",),
+            size_bytes=4,
+            file_identity=(1, 1),
+        )
         manager.folder_status.return_value = ready("Open folder: C:/work")
         manager.terminal_status.return_value = ready(
             "Open terminal in: C:/work",
@@ -115,19 +124,25 @@ class AppContextMenuTests(unittest.TestCase):
 
     def make_widget(self, manager=None, notifier=None):
         parent = QMenu()
+        coordinator = InlineLogPanelCoordinator(parent)
         parent.popup(QPoint(200, 200))
         QApplication.processEvents()
-        widget = AppControlWidget(manager or self.make_manager(), parent, notifier)
+        widget = AppControlWidget(
+            manager or self.make_manager(),
+            parent,
+            notifier,
+            coordinator,
+        )
         widget.show()
         QApplication.processEvents()
-        self.addCleanup(self.dispose, widget, parent)
+        self.addCleanup(self.dispose, widget, parent, coordinator)
         return widget, parent
 
     @staticmethod
-    def dispose(widget, parent):
+    def dispose(widget, parent, coordinator=None):
         widget.timer.stop()
-        widget.output_log_preview.hide_preview()
-        widget.error_log_preview.hide_preview()
+        if coordinator is not None:
+            coordinator.shutdown()
         if widget._app_context_menu is not None:
             widget._app_context_menu.close()
         widget.close()
@@ -280,10 +295,10 @@ class AppContextMenuTests(unittest.TestCase):
         manager = self.make_manager()
         parent = MagicMock()
         parent.isVisible.return_value = True
-        widget = AppControlWidget(manager, parent)
+        widget = AppControlWidget(manager, parent, coordinator=InlineLogPanelCoordinator())
         widget.show()
         QApplication.processEvents()
-        self.addCleanup(self.dispose, widget, parent)
+        self.addCleanup(self.dispose, widget, parent, widget.log_coordinator)
 
         menu = widget.show_app_context_menu(widget.lbl_name.mapToGlobal(QPoint(0, 0)))
         QApplication.processEvents()
@@ -309,6 +324,43 @@ class AppContextMenuTests(unittest.TestCase):
         second = widget.show_app_context_menu(QPoint(320, 320))
         self.assertIs(widget._app_context_menu, second)
         self.assertIsNot(first, second)
+
+    def test_inline_panel_is_vertical_child_and_no_floating_preview_exists(self):
+        widget, _parent = self.make_widget(self.make_manager())
+        self.assertIsInstance(widget.inline_log_panel, InlineLogPanel)
+        self.assertIs(widget.inline_log_panel.parentWidget(), widget)
+        self.assertFalse(widget.inline_log_panel.isWindow())
+        self.assertEqual(widget.layout().count(), 2)
+        self.assertIs(widget.layout().itemAt(0).widget(), widget.top_row)
+        self.assertIs(widget.layout().itemAt(1).widget(), widget.inline_log_panel)
+        self.assertFalse(hasattr(widget, "output_log_preview"))
+        self.assertFalse(hasattr(widget, "error_log_preview"))
+
+    def test_log_hover_routes_to_shared_coordinator_and_click_opens_once(self):
+        manager = self.make_manager()
+        coordinator = MagicMock()
+        parent = QMenu()
+        widget = AppControlWidget(manager, parent, coordinator=coordinator)
+        widget.show()
+        QApplication.processEvents()
+        self.addCleanup(self.dispose, widget, parent)
+
+        widget.btn_ologs.hover_entered.emit()
+        widget.btn_ologs.hover_left.emit()
+        widget.btn_elogs.hover_entered.emit()
+        widget.btn_elogs.hover_left.emit()
+        QTest.mouseClick(widget.btn_ologs, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(widget.btn_elogs, Qt.MouseButton.LeftButton)
+
+        coordinator.register_row.assert_called_once_with(widget)
+        coordinator.button_entered.assert_any_call(widget, "stdout")
+        coordinator.button_left.assert_any_call(widget, "stdout")
+        coordinator.button_entered.assert_any_call(widget, "stderr")
+        coordinator.button_left.assert_any_call(widget, "stderr")
+        manager.view_output_log.assert_called_once_with(False)
+        manager.view_error_log.assert_called_once_with(False)
+        manager.launch.assert_not_called()
+        manager.stop_all.assert_not_called()
 
 
 class TrayToolNotifierTests(unittest.TestCase):

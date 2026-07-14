@@ -11,13 +11,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QMenu
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtWidgets import QApplication, QMenu, QWidgetAction
 
 from lib.core import AppController
 from lib.runtime.models import RunRecord
 from lib.runtime.process_identity import get_process_created_at
 from lib.session.subprocess_session import SubprocessSessionManager
+from lib.ui.inline_log_panel import InlineLogPanelCoordinator
 from lib.ui.log_reader import LogSnapshot, LogSnapshotState
 from multi import AppControlWidget, AppManager, SystemTrayApp
 
@@ -165,22 +166,24 @@ class RecoveredRuntimeInfoTests(unittest.TestCase):
             }
             manager = AppManager(controller, "History")
             menu = QMenu()
-            widget = AppControlWidget(manager, menu)
+            coordinator = InlineLogPanelCoordinator(menu, refresh_interval_ms=1000)
+            widget = AppControlWidget(manager, menu, coordinator=coordinator)
             try:
+                coordinator.request_open(widget, "stdout")
                 self.assertIn(
                     "historical output tail",
-                    widget.output_log_preview.content_provider(),
+                    widget.inline_log_panel.log_view.toPlainText(),
                 )
+                coordinator.request_open(widget, "stderr")
                 self.assertIn(
                     "historical error tail",
-                    widget.error_log_preview.content_provider(),
+                    widget.inline_log_panel.log_view.toPlainText(),
                 )
                 self.assertTrue(widget.btn_ologs.isEnabled())
                 self.assertTrue(widget.btn_elogs.isEnabled())
             finally:
                 widget.timer.stop()
-                widget.output_log_preview.hide_preview()
-                widget.error_log_preview.hide_preview()
+                coordinator.shutdown()
                 widget.deleteLater()
                 menu.deleteLater()
 
@@ -263,8 +266,8 @@ class RecoveredUiStateTests(unittest.TestCase):
     @staticmethod
     def _dispose_widget(widget):
         widget.timer.stop()
-        widget.output_log_preview.hide_preview()
-        widget.error_log_preview.hide_preview()
+        if getattr(widget, "_owns_log_coordinator", False):
+            widget.log_coordinator.shutdown()
         widget.deleteLater()
 
     def test_running_primary_text_is_elapsed_only_green_and_instances_in_tooltip(self):
@@ -414,11 +417,12 @@ class RecoveredUiStateTests(unittest.TestCase):
             expected_name_width = (
                 widget.lbl_name.fontMetrics().horizontalAdvance(name) + 8
             )
-            self.assertGreaterEqual(
+            self.assertLess(
                 widget.name_container.minimumWidth(),
                 expected_name_width,
             )
-            self.assertEqual(widget.layout().stretch(0), 1)
+            self.assertGreaterEqual(widget.name_container.minimumWidth(), 96)
+            self.assertEqual(widget.top_row.layout().stretch(0), 1)
             self.assertEqual(widget.lbl_pid.text(), "PID: 2468")
             if widget.lbl_name.font().pointSize() > 0:
                 self.assertLess(
@@ -441,6 +445,165 @@ class RecoveredUiStateTests(unittest.TestCase):
         finally:
             self._dispose_widget(widget)
             menu.deleteLater()
+
+    def test_refresh_menu_owns_one_coordinator_and_hide_stops_timers(self):
+        manager = self._manager({"status": "STOPPED", "instances": 0})
+        menu = QMenu()
+        tray = SimpleNamespace(
+            menu=menu,
+            managers=[manager],
+            refresh_all=lambda: None,
+            stop_all_apps=lambda: None,
+            restart_app=lambda: None,
+            exit_app=lambda: None,
+            _menu_generation=0,
+        )
+        try:
+            SystemTrayApp.refresh_menu(tray)
+            coordinator = tray.log_coordinator
+            self.assertIsNotNone(coordinator)
+            rows = menu.findChildren(AppControlWidget)
+            self.assertEqual(len(rows), 1)
+            self.assertIs(rows[0].log_coordinator, coordinator)
+            coordinator.request_open(rows[0], "stdout")
+            self.assertTrue(coordinator.refresh_timer.isActive())
+            menu.aboutToHide.emit()
+            self.assertFalse(coordinator.refresh_timer.isActive())
+            self.assertFalse(coordinator.hide_timer.isActive())
+            self.assertFalse(rows[0].inline_log_panel.isVisible())
+        finally:
+            if hasattr(tray, "log_coordinator"):
+                tray.log_coordinator.shutdown()
+            for widget in menu.findChildren(AppControlWidget):
+                self._dispose_widget(widget)
+            menu.deleteLater()
+            QApplication.processEvents()
+
+    def test_refresh_menu_rebuild_replaces_and_shuts_old_coordinator(self):
+        manager = self._manager({"status": "STOPPED", "instances": 0})
+        menu = QMenu()
+        tray = SimpleNamespace(
+            menu=menu,
+            managers=[manager],
+            refresh_all=lambda: None,
+            stop_all_apps=lambda: None,
+            restart_app=lambda: None,
+            exit_app=lambda: None,
+            _menu_generation=0,
+        )
+        try:
+            SystemTrayApp.refresh_menu(tray)
+            old = tray.log_coordinator
+            row = menu.findChild(AppControlWidget)
+            old.request_open(row, "stdout")
+            self.assertTrue(old.refresh_timer.isActive())
+            SystemTrayApp.refresh_menu(tray)
+            self.assertIsNot(tray.log_coordinator, old)
+            self.assertFalse(old.refresh_timer.isActive())
+            self.assertFalse(old.hide_timer.isActive())
+        finally:
+            tray.log_coordinator.shutdown()
+            for widget in menu.findChildren(AppControlWidget):
+                self._dispose_widget(widget)
+            menu.deleteLater()
+            QApplication.processEvents()
+
+    def test_open_panel_invalidates_widget_action_and_menu_geometry(self):
+        manager = self._manager({"status": "STOPPED", "instances": 0})
+        menu = QMenu()
+        tray = SimpleNamespace(
+            menu=menu,
+            managers=[manager],
+            refresh_all=lambda: None,
+            stop_all_apps=lambda: None,
+            restart_app=lambda: None,
+            exit_app=lambda: None,
+            _menu_generation=0,
+        )
+        try:
+            SystemTrayApp.refresh_menu(tray)
+            row_action = next(
+                action
+                for action in menu.actions()
+                if isinstance(action, QWidgetAction)
+            )
+            row = row_action.defaultWidget()
+            menu.popup(QPoint(100, 100))
+            QApplication.processEvents()
+            initial_action_height = menu.actionGeometry(row_action).height()
+            initial_menu_height = menu.height()
+
+            tray.log_coordinator.request_open(row, "stdout")
+            QApplication.processEvents()
+
+            self.assertTrue(row.inline_log_panel.isVisible())
+            self.assertGreater(
+                menu.actionGeometry(row_action).height(),
+                initial_action_height + 90,
+            )
+            self.assertGreater(menu.height(), initial_menu_height)
+        finally:
+            tray.log_coordinator.shutdown()
+            for widget in menu.findChildren(AppControlWidget):
+                self._dispose_widget(widget)
+            menu.close()
+            menu.deleteLater()
+            QApplication.processEvents()
+
+    def test_open_panel_invalidates_widget_action_with_eleven_rows(self):
+        managers = [
+            self._manager(
+                {"status": "STOPPED", "instances": 0},
+                name=f"Demo {index:02d}",
+            )
+            for index in range(11)
+        ]
+        menu = QMenu()
+        tray = SimpleNamespace(
+            menu=menu,
+            managers=managers,
+            refresh_all=lambda: None,
+            stop_all_apps=lambda: None,
+            restart_app=lambda: None,
+            exit_app=lambda: None,
+            _menu_generation=0,
+        )
+        try:
+            SystemTrayApp.refresh_menu(tray)
+            row = next(
+                widget
+                for widget in menu.findChildren(AppControlWidget)
+                if widget.manager.name == "Demo 00"
+            )
+            row_action = next(
+                action
+                for action in menu.actions()
+                if isinstance(action, QWidgetAction)
+                and action.defaultWidget() is row
+            )
+            menu.popup(QPoint(100, 100))
+            QApplication.processEvents()
+            initial_height = menu.actionGeometry(row_action).height()
+
+            tray.log_coordinator.request_open(row, "stdout")
+            QApplication.processEvents()
+
+            self.assertTrue(row.inline_log_panel.isVisible())
+            self.assertGreater(
+                menu.actionGeometry(row_action).height(),
+                initial_height + 90,
+            )
+            self.assertEqual(
+                menu.actionGeometry(row_action).height(),
+                row.height(),
+            )
+        finally:
+            tray.log_coordinator.shutdown()
+            for widget in menu.findChildren(AppControlWidget):
+                self._dispose_widget(widget)
+            menu.close()
+            menu.deleteLater()
+            QApplication.processEvents()
 
     def test_menu_minimum_width_tracks_embedded_row_size_hint(self):
         manager = self._manager(
