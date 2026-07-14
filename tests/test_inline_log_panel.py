@@ -172,6 +172,47 @@ class InlineLogPanelWidgetTests(unittest.TestCase):
         self.assertGreater(after.anchor(), after.position())
         self.assertTrue(self.panel.log_view.hasFocus())
 
+    def test_duplicate_selection_survives_bounded_tail_prefix_eviction(self):
+        clipboard = QApplication.clipboard()
+        previous_clipboard = clipboard.text()
+        try:
+            old_lines = ("same", "X", "same", "Y", "same", "Z")
+            new_lines = ("X", "same", "Y", "same", "Z", "N")
+            self.panel.show()
+            self.panel.update_snapshot(ready_snapshot(*old_lines, size=100))
+            self.panel.log_view.setFocus()
+
+            old_text = self.panel.log_view.toPlainText()
+            start = old_text.index("same", old_text.index("same") + 1)
+            end = old_text.index("Y") + 1
+            cursor = self.panel.log_view.textCursor()
+            cursor.setPosition(start)
+            cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            self.panel.log_view.setTextCursor(cursor)
+            before = self.panel.log_view.textCursor()
+            before_direction = before.anchor() < before.position()
+            self.panel.log_view.copy()
+            self.assertEqual(clipboard.text(), "same\nY")
+
+            self.panel.update_snapshot(ready_snapshot(*new_lines, size=110))
+            QApplication.processEvents()
+            self.panel.log_view.copy()
+
+            after = self.panel.log_view.textCursor()
+            new_text = self.panel.log_view.toPlainText()
+            expected_start = new_text.index("same")
+            expected_end = new_text.index("Y") + 1
+            self.assertEqual(
+                (after.anchor(), after.position()),
+                (expected_start, expected_end),
+            )
+            self.assertEqual(after.selectedText(), "same\u2029Y")
+            self.assertEqual(after.anchor() < after.position(), before_direction)
+            self.assertEqual(clipboard.text(), "same\nY")
+            self.assertTrue(self.panel.log_view.hasFocus())
+        finally:
+            clipboard.setText(previous_clipboard)
+
     def test_scroll_status_pauses_and_resumes(self):
         lines = tuple(f"line-{index:03d}" for index in range(200))
         self.panel.resize(500, 180)
@@ -271,6 +312,27 @@ class InlineLogPanelWidgetTests(unittest.TestCase):
         current = self.panel.log_view.textCursor()
         self.assertFalse(current.hasSelection())
         self.assertEqual(current.position(), position)
+        self.assertTrue(self.panel.log_view.hasFocus())
+
+    def test_repeated_line_caret_survives_bounded_tail_prefix_eviction(self):
+        old_lines = ("same", "X", "same", "Y", "same", "Z")
+        new_lines = ("X", "same", "Y", "same", "Z", "N")
+        self.panel.show()
+        self.panel.update_snapshot(ready_snapshot(*old_lines, size=100))
+        old_text = self.panel.log_view.toPlainText()
+        repeated_start = old_text.index("same", old_text.index("same") + 1)
+        cursor = self.panel.log_view.textCursor()
+        cursor.setPosition(repeated_start + 2)
+        self.panel.log_view.setTextCursor(cursor)
+        self.panel.log_view.setFocus()
+
+        self.panel.update_snapshot(ready_snapshot(*new_lines, size=110))
+        QApplication.processEvents()
+
+        current = self.panel.log_view.textCursor()
+        expected = self.panel.log_view.toPlainText().index("same") + 2
+        self.assertFalse(current.hasSelection())
+        self.assertEqual((current.anchor(), current.position()), (expected, expected))
         self.assertTrue(self.panel.log_view.hasFocus())
 
     def test_structural_transition_may_reset_selection(self):

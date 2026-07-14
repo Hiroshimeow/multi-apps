@@ -175,6 +175,20 @@ class _ScrollAnchor:
     pixel_offset: float
 
 
+@dataclass(frozen=True, slots=True)
+class _AppendLineMapping:
+    dropped_prefix: int
+    overlap_length: int
+
+    def map_old_index(self, old_index):
+        if old_index < self.dropped_prefix:
+            return None
+        new_index = old_index - self.dropped_prefix
+        if new_index >= self.overlap_length:
+            return None
+        return new_index
+
+
 class InlineLogPanel(QFrame):
     pointer_entered = pyqtSignal()
     pointer_left = pyqtSignal()
@@ -372,20 +386,46 @@ class InlineLogPanel(QFrame):
         )
 
     @staticmethod
-    def _matching_line_index(line_text, occurrence, prior_index, new_lines):
-        matches = [index for index, text in enumerate(new_lines) if text == line_text]
-        if not matches:
-            return None
-        if occurrence < len(matches):
-            return matches[occurrence]
-        return min(matches, key=lambda index: abs(index - prior_index))
+    def _append_line_mapping(old_lines, new_lines):
+        if not old_lines or not new_lines:
+            return _AppendLineMapping(len(old_lines), 0)
 
-    def _restore_scroll_anchor(self, anchor, new_lines):
+        prefix = [0] * len(new_lines)
+        matched = 0
+        for index in range(1, len(new_lines)):
+            while matched and new_lines[index] != new_lines[matched]:
+                matched = prefix[matched - 1]
+            if new_lines[index] == new_lines[matched]:
+                matched += 1
+            prefix[index] = matched
+
+        matched = 0
+        last_old_index = len(old_lines) - 1
+        for old_index, line in enumerate(old_lines):
+            while matched and line != new_lines[matched]:
+                matched = prefix[matched - 1]
+            if line == new_lines[matched]:
+                matched += 1
+            if matched == len(new_lines) and old_index != last_old_index:
+                matched = prefix[matched - 1]
+
+        return _AppendLineMapping(len(old_lines) - matched, matched)
+
+    @staticmethod
+    def _matching_line_index(line_text, prior_index, new_lines, mapping):
+        new_index = mapping.map_old_index(prior_index)
+        if new_index is None or new_index >= len(new_lines):
+            return None
+        if new_lines[new_index] != line_text:
+            return None
+        return new_index
+
+    def _restore_scroll_anchor(self, anchor, new_lines, mapping):
         new_index = self._matching_line_index(
             anchor.line_text,
-            anchor.occurrence,
             anchor.block_index,
             new_lines,
+            mapping,
         )
         bar = self.log_view.verticalScrollBar()
         if new_index is None:
@@ -396,12 +436,12 @@ class InlineLogPanel(QFrame):
         return True
 
     @staticmethod
-    def _map_endpoint(endpoint, new_lines, document):
+    def _map_endpoint(endpoint, new_lines, document, mapping):
         block_index = InlineLogPanel._matching_line_index(
             endpoint.line_text,
-            endpoint.occurrence,
             endpoint.block_index,
             new_lines,
+            mapping,
         )
         if block_index is None:
             return None
@@ -410,10 +450,10 @@ class InlineLogPanel(QFrame):
             return None
         return block.position() + min(endpoint.offset, len(new_lines[block_index]))
 
-    def _restore_cursor_state(self, state, new_lines):
+    def _restore_cursor_state(self, state, new_lines, mapping):
         document = self.log_view.document()
-        anchor = self._map_endpoint(state.anchor, new_lines, document)
-        position = self._map_endpoint(state.position, new_lines, document)
+        anchor = self._map_endpoint(state.anchor, new_lines, document, mapping)
+        position = self._map_endpoint(state.position, new_lines, document, mapping)
         if anchor is None or position is None:
             return False
         cursor = QTextCursor(document)
@@ -479,11 +519,14 @@ class InlineLogPanel(QFrame):
 
         at_bottom = self._at_bottom()
         old_scroll_value = self.log_view.verticalScrollBar().value()
+        old_display_lines = self._display_lines
         cursor_state = None
         scroll_anchor = None
+        append_mapping = None
         compatible_append = change_kind == LogChangeKind.APPENDED
         if compatible_append:
             cursor_state = self._capture_cursor_state()
+            append_mapping = self._append_line_mapping(old_display_lines, display_lines)
             if not at_bottom:
                 scroll_anchor = self._capture_scroll_anchor()
 
@@ -492,8 +535,8 @@ class InlineLogPanel(QFrame):
         self.highlighter.set_ranges(ranges)
         self._display_signature = signature
 
-        if compatible_append and cursor_state is not None:
-            self._restore_cursor_state(cursor_state, display_lines)
+        if compatible_append and cursor_state is not None and append_mapping is not None:
+            self._restore_cursor_state(cursor_state, display_lines, append_mapping)
 
         bar = self.log_view.verticalScrollBar()
         structural = change_kind in {
@@ -505,8 +548,8 @@ class InlineLogPanel(QFrame):
         }
         if reset_bottom or structural or at_bottom:
             bar.setValue(bar.maximum())
-        elif scroll_anchor is not None:
-            self._restore_scroll_anchor(scroll_anchor, display_lines)
+        elif scroll_anchor is not None and append_mapping is not None:
+            self._restore_scroll_anchor(scroll_anchor, display_lines, append_mapping)
         else:
             bar.setValue(min(old_scroll_value, bar.maximum()))
 
