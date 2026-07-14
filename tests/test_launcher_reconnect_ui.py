@@ -18,6 +18,7 @@ from lib.core import AppController
 from lib.runtime.models import RunRecord
 from lib.runtime.process_identity import get_process_created_at
 from lib.session.subprocess_session import SubprocessSessionManager
+from lib.ui.log_reader import LogSnapshot, LogSnapshotState
 from multi import AppControlWidget, AppManager, SystemTrayApp
 
 
@@ -702,6 +703,76 @@ class LauncherLifecycleTests(unittest.TestCase):
         tray = SimpleNamespace(controller=controller)
         SystemTrayApp.stop_all_apps(tray)
         controller.stop_all.assert_called_once_with()
+
+
+class AppManagerStructuredLogTests(unittest.TestCase):
+    def _manager(self, root, status=None, log_reader=None):
+        controller = MagicMock()
+        controller.config_manager.get_app.return_value = {"id": "demo", "name": "Demo"}
+        controller.config_manager.get_log_dir.return_value = str(Path(root) / "logs")
+        controller.get_app_status.return_value = status or {"status": "STOPPED"}
+        return AppManager(controller, "Demo", tool_service=MagicMock(), log_reader=log_reader)
+
+    def test_injected_reader_receives_exact_selected_path_and_bounds(self):
+        with tempfile.TemporaryDirectory() as root:
+            selected = Path(root) / "active.out.log"
+            reader = MagicMock()
+            expected = LogSnapshot(str(selected.resolve()), LogSnapshotState.READY, ("line",), 4)
+            reader.read.return_value = expected
+            manager = self._manager(root, {"status": "RUNNING", "stdout_path": str(selected)}, reader)
+
+            actual = manager.get_log_snapshot("out", max_lines=123, max_bytes=4096)
+
+            self.assertIs(actual, expected)
+            reader.read.assert_called_once_with(str(selected.resolve()), max_lines=123, max_bytes=4096)
+
+    def test_historical_path_and_legacy_fallback_are_unchanged(self):
+        with tempfile.TemporaryDirectory() as root:
+            historical = Path(root) / "history.err.log"
+            manager = self._manager(root, {"status": "STOPPED", "stderr_path": str(historical)})
+            self.assertEqual(manager.get_log_path("err"), str(historical.resolve()))
+            fallback = self._manager(root)
+            self.assertEqual(fallback.get_log_path("out"), str(Path(root) / "logs" / "Demo.out.log"))
+
+    def test_compatibility_wrapper_formats_states(self):
+        with tempfile.TemporaryDirectory() as root:
+            reader = MagicMock()
+            manager = self._manager(root, log_reader=reader)
+            path = str((Path(root) / "x.log").resolve())
+            cases = [
+                (LogSnapshot(path, LogSnapshotState.MISSING), "[output log does not exist]"),
+                (LogSnapshot(path, LogSnapshotState.EMPTY), "[output log is empty]"),
+                (LogSnapshot(path, LogSnapshotState.UNREADABLE, error="PermissionError: denied"), "[cannot read output log: PermissionError: denied]"),
+            ]
+            for snapshot, expected in cases:
+                with self.subTest(state=snapshot.state):
+                    reader.read.return_value = snapshot
+                    self.assertEqual(manager.read_log_tail("out"), expected)
+
+    def test_compatibility_wrapper_keeps_seven_newest_lines_and_presentation_rules(self):
+        with tempfile.TemporaryDirectory() as root:
+            reader = MagicMock()
+            lines = tuple([f"old-{i}" for i in range(3)] + ["tab\there"] + [f"new-{i}" for i in range(6)] + ["x" * 230])
+            path = str((Path(root) / "x.log").resolve())
+            reader.read.return_value = LogSnapshot(path, LogSnapshotState.READY, lines, 999)
+            manager = self._manager(root, log_reader=reader)
+
+            rendered = manager.read_log_tail("out")
+
+            reader.read.assert_called_once_with(manager.get_log_path("out"), max_lines=7, max_bytes=65536)
+            shown = rendered.splitlines()
+            self.assertEqual(len(shown), 7)
+            self.assertNotIn("old-0", rendered)
+            self.assertTrue(shown[-1].endswith("..."))
+            self.assertLessEqual(len(shown[-1]), 220)
+
+    def test_tab_replacement_is_preserved(self):
+        with tempfile.TemporaryDirectory() as root:
+            reader = MagicMock()
+            path = str((Path(root) / "x.log").resolve())
+            reader.read.return_value = LogSnapshot(path, LogSnapshotState.READY, ("a\tb",), 3)
+            manager = self._manager(root, log_reader=reader)
+            self.assertEqual(manager.read_log_tail("err"), "a    b")
 
 
 if __name__ == "__main__":

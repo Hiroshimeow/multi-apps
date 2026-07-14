@@ -34,6 +34,12 @@ from lib.core import AppController
 from lib.runners.command_runner import CommandRunner
 from lib.runtime.single_instance import SingleInstanceLock
 from lib.ui.app_tools import AppToolAction, AppToolService
+from lib.ui.log_reader import (
+    BoundedLogReader,
+    DEFAULT_MAX_BYTES,
+    DEFAULT_TAIL_LINES,
+    LogSnapshotState,
+)
 from lib.utils import is_windows, is_linux
 
 
@@ -160,6 +166,7 @@ class AppManager:
         app_name,
         startup_auto_start_suppressed_ids=None,
         tool_service=None,
+        log_reader=None,
     ):
         self.controller = controller
         self.name = app_name
@@ -170,6 +177,7 @@ class AppManager:
             else set()
         )
         self.tool_service = tool_service or AppToolService()
+        self.log_reader = log_reader or BoundedLogReader()
 
     @property
     def app_id(self):
@@ -363,34 +371,36 @@ class AppManager:
         suffix = "out" if stream == "out" else "err"
         return os.path.join(log_dir, f"{self.name}.{suffix}.log")
 
+    def get_log_snapshot(
+        self,
+        stream,
+        *,
+        max_lines=DEFAULT_TAIL_LINES,
+        max_bytes=DEFAULT_MAX_BYTES,
+    ):
+        return self.log_reader.read(
+            self.get_log_path(stream),
+            max_lines=max_lines,
+            max_bytes=max_bytes,
+        )
+
     def read_log_tail(self, stream, max_lines=7, max_bytes=65536, max_line_chars=220):
-        """Read a small tail of one log without loading the full file."""
-        path = self.get_log_path(stream)
+        """Return the existing formatted preview from a bounded structured snapshot."""
+        snapshot = self.get_log_snapshot(
+            stream,
+            max_lines=max_lines,
+            max_bytes=max_bytes,
+        )
         label = "output" if stream == "out" else "error"
-        if not os.path.exists(path):
+        if snapshot.state == LogSnapshotState.MISSING:
             return f"[{label} log does not exist]"
-
-        try:
-            with open(path, "rb") as handle:
-                handle.seek(0, os.SEEK_END)
-                size = handle.tell()
-                read_size = min(size, max_bytes)
-                handle.seek(-read_size, os.SEEK_END)
-                raw = handle.read(read_size)
-        except OSError as exc:
-            return f"[cannot read {label} log: {exc}]"
-
-        text = raw.decode("utf-8", errors="replace")
-        lines = text.splitlines()
-
-        # The first line can be partial when reading only the end of a large file.
-        if size > read_size and lines:
-            lines = lines[1:]
-        if not lines:
+        if snapshot.state == LogSnapshotState.EMPTY:
             return f"[{label} log is empty]"
+        if snapshot.state == LogSnapshotState.UNREADABLE:
+            return f"[cannot read {label} log: {snapshot.error}]"
 
         tail = []
-        for line in lines[-max_lines:]:
+        for line in snapshot.lines[-max_lines:]:
             line = line.replace("	", "    ")
             if len(line) > max_line_chars:
                 line = line[: max_line_chars - 3] + "..."
