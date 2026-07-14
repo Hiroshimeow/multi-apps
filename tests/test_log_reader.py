@@ -47,6 +47,32 @@ class _ReadRecorder:
         return self._handle.read(size)
 
 
+class _LateIoFailure:
+    def __init__(self, handle, *, read_error=None, seek_error=None):
+        self._handle = handle
+        self._read_error = read_error
+        self._seek_error = seek_error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return self._handle.__exit__(*args)
+
+    def __getattr__(self, name):
+        return getattr(self._handle, name)
+
+    def read(self, size=-1):
+        if self._read_error is not None:
+            raise self._read_error
+        return self._handle.read(size)
+
+    def seek(self, *args):
+        if self._seek_error is not None:
+            raise self._seek_error
+        return self._handle.seek(*args)
+
+
 class BoundedLogReaderTests(unittest.TestCase):
     def setUp(self):
         self.reader = BoundedLogReader()
@@ -185,6 +211,67 @@ class BoundedLogReaderTests(unittest.TestCase):
             unreadable = BoundedLogReader(opener=denied_opener).read(path)
             self.assertEqual(unreadable.state, LogSnapshotState.UNREADABLE)
             self.assertEqual(unreadable.error, "PermissionError: denied")
+
+    def _assert_late_io_snapshot(self, snapshot, path, error_type):
+        stat = path.stat()
+        expected_identity = (
+            (int(stat.st_dev), int(stat.st_ino))
+            if stat.st_dev or stat.st_ino
+            else None
+        )
+        self.assertEqual(snapshot.state, LogSnapshotState.UNREADABLE)
+        self.assertEqual(snapshot.size_bytes, stat.st_size)
+        self.assertEqual(snapshot.file_identity, expected_identity)
+        self.assertTrue(snapshot.error.startswith(f"{error_type}:"))
+
+    def test_post_fstat_read_file_not_found_is_unreadable_with_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = self._write(root, "late-missing.log", b"abc\n")
+
+            def opener(value, mode):
+                return _LateIoFailure(
+                    open(value, mode),
+                    read_error=FileNotFoundError("late missing"),
+                )
+
+            snapshot = BoundedLogReader(opener=opener).read(path)
+            self._assert_late_io_snapshot(snapshot, path, "FileNotFoundError")
+
+    def test_post_fstat_read_os_error_is_unreadable_with_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = self._write(root, "late-read.log", b"abc\n")
+
+            def opener(value, mode):
+                return _LateIoFailure(
+                    open(value, mode),
+                    read_error=OSError("late read"),
+                )
+
+            snapshot = BoundedLogReader(opener=opener).read(path)
+            self._assert_late_io_snapshot(snapshot, path, "OSError")
+
+    def test_post_fstat_seek_os_error_is_unreadable_with_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = self._write(root, "late-seek.log", b"abc\n")
+
+            def opener(value, mode):
+                return _LateIoFailure(
+                    open(value, mode),
+                    seek_error=OSError("late seek"),
+                )
+
+            snapshot = BoundedLogReader(opener=opener).read(path)
+            self._assert_late_io_snapshot(snapshot, path, "OSError")
+
+    def test_initial_opener_file_not_found_remains_missing(self):
+        def missing_opener(*args, **kwargs):
+            raise FileNotFoundError("initial missing")
+
+        snapshot = BoundedLogReader(opener=missing_opener).read("missing.log")
+        self.assertEqual(snapshot.state, LogSnapshotState.MISSING)
+        self.assertEqual(snapshot.size_bytes, 0)
+        self.assertIsNone(snapshot.file_identity)
+        self.assertIsNone(snapshot.error)
 
     def test_exact_5000_line_boundary(self):
         with tempfile.TemporaryDirectory() as root:

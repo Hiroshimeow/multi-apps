@@ -72,7 +72,20 @@ class BoundedLogReader:
         canonical = self._canonical_path(path)
 
         try:
-            with self._opener(canonical, "rb") as handle:
+            handle = self._opener(canonical, "rb")
+        except FileNotFoundError:
+            return LogSnapshot(path=canonical, state=LogSnapshotState.MISSING)
+        except OSError as exc:
+            return LogSnapshot(
+                path=canonical,
+                state=LogSnapshotState.UNREADABLE,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        size_bytes = 0
+        identity = None
+        try:
+            with handle:
                 stat = os.fstat(handle.fileno())
                 size_bytes = int(stat.st_size)
                 identity = (
@@ -97,12 +110,12 @@ class BoundedLogReader:
 
                 handle.seek(read_start)
                 raw = handle.read(read_length)
-        except FileNotFoundError:
-            return LogSnapshot(path=canonical, state=LogSnapshotState.MISSING)
         except OSError as exc:
             return LogSnapshot(
                 path=canonical,
                 state=LogSnapshotState.UNREADABLE,
+                size_bytes=size_bytes,
+                file_identity=identity,
                 error=f"{type(exc).__name__}: {exc}",
             )
 
