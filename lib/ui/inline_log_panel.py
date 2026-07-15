@@ -78,34 +78,63 @@ def compute_inline_menu_geometry(
     desired_panel_height: int,
     available_geometry: QRect,
     anchor_rect: QRect,
+    preserve_origin: bool = False,
 ) -> InlineMenuGeometry:
-    width_cap = max(1, available_geometry.width() - 2 * SCREEN_MARGIN)
-    height_cap = max(1, available_geometry.height() - 2 * SCREEN_MARGIN)
-    desired = min(PANEL_MAX_HEIGHT, max(PANEL_NORMAL_MIN_HEIGHT, desired_panel_height))
-    normal_budget = height_cap - max(0, base_menu_size.height())
-    if normal_budget >= PANEL_NORMAL_MIN_HEIGHT:
-        panel_height = min(desired, normal_budget)
+    if preserve_origin:
+        x = min(
+            max(anchor_rect.left(), available_geometry.left()),
+            available_geometry.right(),
+        )
+        y = min(
+            max(anchor_rect.top(), available_geometry.top()),
+            available_geometry.bottom(),
+        )
+        width_cap = max(1, available_geometry.right() - x + 1)
+        height_cap = max(1, available_geometry.bottom() - y + 1)
+    else:
+        width_cap = max(1, available_geometry.width() - 2 * SCREEN_MARGIN)
+        height_cap = max(1, available_geometry.height() - 2 * SCREEN_MARGIN)
+
+    if desired_panel_height <= 0:
+        panel_height = 0
         overflow = False
-    elif normal_budget >= PANEL_EMERGENCY_MIN_HEIGHT:
-        panel_height = normal_budget
+    elif preserve_origin:
+        panel_height = min(
+            PANEL_MAX_HEIGHT,
+            max(PANEL_NORMAL_MIN_HEIGHT, desired_panel_height),
+        )
         overflow = False
     else:
-        panel_height = PANEL_EMERGENCY_MIN_HEIGHT
-        overflow = True
+        desired = min(
+            PANEL_MAX_HEIGHT,
+            max(PANEL_NORMAL_MIN_HEIGHT, desired_panel_height),
+        )
+        normal_budget = height_cap - max(0, base_menu_size.height())
+        if normal_budget >= PANEL_NORMAL_MIN_HEIGHT:
+            panel_height = min(desired, normal_budget)
+            overflow = False
+        elif normal_budget >= PANEL_EMERGENCY_MIN_HEIGHT:
+            panel_height = normal_budget
+            overflow = False
+        else:
+            panel_height = PANEL_EMERGENCY_MIN_HEIGHT
+            overflow = True
 
     menu_width = min(width_cap, max(base_menu_size.width(), int(content_width)))
     natural_height = max(1, base_menu_size.height() + panel_height)
     menu_height = min(height_cap, natural_height)
     overflow = overflow or natural_height > height_cap
 
-    left = available_geometry.left() + SCREEN_MARGIN
-    top = available_geometry.top() + SCREEN_MARGIN
-    right = available_geometry.right() - SCREEN_MARGIN + 1
-    bottom = available_geometry.bottom() - SCREEN_MARGIN + 1
-    requested_x = anchor_rect.left()
-    requested_y = anchor_rect.bottom() - menu_height + 1
-    x = min(max(requested_x, left), max(left, right - menu_width))
-    y = min(max(requested_y, top), max(top, bottom - menu_height))
+    if not preserve_origin:
+        left = available_geometry.left() + SCREEN_MARGIN
+        top = available_geometry.top() + SCREEN_MARGIN
+        right = available_geometry.right() - SCREEN_MARGIN + 1
+        bottom = available_geometry.bottom() - SCREEN_MARGIN + 1
+        requested_x = anchor_rect.left()
+        requested_y = anchor_rect.bottom() - menu_height + 1
+        x = min(max(requested_x, left), max(left, right - menu_width))
+        y = min(max(requested_y, top), max(top, bottom - menu_height))
+
     return InlineMenuGeometry(
         panel_height=int(panel_height),
         menu_rect=QRect(int(x), int(y), int(menu_width), int(menu_height)),

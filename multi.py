@@ -913,6 +913,7 @@ class SystemTrayApp(QSystemTrayIcon):
     def _resize_menu_for_inline_panel_once(self):
         menu = self.menu
         menu.ensurePolished()
+        visible_anchor = menu.frameGeometry() if menu.isVisible() else QRect()
 
         def invalidate_widget_actions():
             coordinator = getattr(self, "log_coordinator", None)
@@ -953,7 +954,12 @@ class SystemTrayApp(QSystemTrayIcon):
 
         invalidate_widget_actions()
         menu.adjustSize()
-        screen = QGuiApplication.screenAt(menu.frameGeometry().center())
+        screen_anchor = (
+            visible_anchor.center()
+            if not visible_anchor.isNull()
+            else menu.frameGeometry().center()
+        )
+        screen = QGuiApplication.screenAt(screen_anchor)
         if screen is None and hasattr(menu, "screen"):
             screen = menu.screen()
         if screen is None:
@@ -965,20 +971,22 @@ class SystemTrayApp(QSystemTrayIcon):
         coordinator = getattr(self, "log_coordinator", None)
         if coordinator is not None and coordinator.current_row is not None:
             panel = coordinator.current_row.inline_log_panel
-        panel_height = panel.height() if panel is not None and panel.isVisible() else 0
+        panel_is_open = panel is not None and panel.isVisible()
+        panel_height = panel.height() if panel_is_open else 0
         natural = menu.sizeHint()
         base_height = max(1, natural.height() - panel_height)
-        anchor = menu.frameGeometry()
+        anchor = visible_anchor if not visible_anchor.isNull() else menu.frameGeometry()
         if anchor.isNull():
             anchor = QRect(screen.availableGeometry().bottomRight(), QSize(1, 1))
         geometry = compute_inline_menu_geometry(
             base_menu_size=QSize(natural.width(), base_height),
             content_width=max(menu.minimumWidth(), natural.width()),
-            desired_panel_height=PANEL_PREFERRED_HEIGHT,
+            desired_panel_height=PANEL_PREFERRED_HEIGHT if panel_is_open else 0,
             available_geometry=screen.availableGeometry(),
             anchor_rect=anchor,
+            preserve_origin=not visible_anchor.isNull(),
         )
-        if panel is not None:
+        if panel_is_open:
             panel.setPreferredHeight(geometry.panel_height)
         menu.setMaximumWidth(geometry.width_cap)
         menu.setMaximumHeight(geometry.height_cap)

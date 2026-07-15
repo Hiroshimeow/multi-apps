@@ -550,6 +550,46 @@ class RecoveredUiStateTests(unittest.TestCase):
             menu.deleteLater()
             QApplication.processEvents()
 
+    def test_open_panel_keeps_visible_menu_origin_stable(self):
+        manager = self._manager({"status": "STOPPED", "instances": 0})
+        menu = QMenu()
+        tray = SimpleNamespace(
+            menu=menu,
+            managers=[manager],
+            refresh_all=lambda: None,
+            stop_all_apps=lambda: None,
+            restart_app=lambda: None,
+            exit_app=lambda: None,
+            _menu_generation=0,
+        )
+        try:
+            SystemTrayApp.refresh_menu(tray)
+            row = menu.findChild(AppControlWidget)
+            available = QApplication.primaryScreen().availableGeometry()
+            menu.popup(QPoint(100, available.bottom() - 20))
+            QApplication.processEvents()
+            initial_geometry = menu.frameGeometry()
+            initial_origin = initial_geometry.topLeft()
+
+            tray.log_coordinator.request_open(row, "stdout")
+            QApplication.processEvents()
+
+            self.assertTrue(row.inline_log_panel.isVisible())
+            self.assertEqual(menu.frameGeometry().topLeft(), initial_origin)
+
+            tray.log_coordinator.hide_current()
+            QApplication.processEvents()
+
+            self.assertEqual(menu.frameGeometry().topLeft(), initial_origin)
+            self.assertEqual(menu.frameGeometry(), initial_geometry)
+        finally:
+            tray.log_coordinator.shutdown()
+            for widget in menu.findChildren(AppControlWidget):
+                self._dispose_widget(widget)
+            menu.close()
+            menu.deleteLater()
+            QApplication.processEvents()
+
     def test_open_panel_invalidates_widget_action_with_eleven_rows(self):
         managers = [
             self._manager(
