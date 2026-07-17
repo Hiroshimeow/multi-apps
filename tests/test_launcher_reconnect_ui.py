@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtWidgets import QApplication, QMenu, QWidgetAction
 
 from lib.core import AppController
@@ -581,6 +581,62 @@ class RecoveredUiStateTests(unittest.TestCase):
             QApplication.processEvents()
 
             self.assertEqual(menu.frameGeometry().topLeft(), initial_origin)
+            self.assertEqual(menu.frameGeometry(), initial_geometry)
+        finally:
+            tray.log_coordinator.shutdown()
+            for widget in menu.findChildren(AppControlWidget):
+                self._dispose_widget(widget)
+            menu.close()
+            menu.deleteLater()
+            QApplication.processEvents()
+
+    def test_close_panel_restores_pre_panel_geometry_after_visible_clamp(self):
+        managers = [
+            self._manager(
+                {"status": "STOPPED", "instances": 0},
+                name=f"Demo {index:02d}",
+            )
+            for index in range(11)
+        ]
+        menu = QMenu()
+        tray = SimpleNamespace(
+            menu=menu,
+            managers=managers,
+            refresh_all=lambda: None,
+            stop_all_apps=lambda: None,
+            restart_app=lambda: None,
+            exit_app=lambda: None,
+            _menu_generation=0,
+        )
+        try:
+            SystemTrayApp.refresh_menu(tray)
+            row = menu.findChild(AppControlWidget)
+            menu.popup(QPoint(100, 100))
+            QApplication.processEvents()
+
+            available = QApplication.primaryScreen().availableGeometry()
+            natural = menu.frameGeometry()
+            initial_geometry = QRect(
+                natural.x(),
+                available.bottom() - natural.height() + 24,
+                natural.width(),
+                natural.height(),
+            )
+            menu.setGeometry(initial_geometry)
+            QApplication.processEvents()
+            initial_geometry = menu.frameGeometry()
+            available_height = available.bottom() - initial_geometry.y() + 1
+            self.assertLess(available_height, initial_geometry.height())
+
+            tray.log_coordinator.request_open(row, "stdout")
+            QApplication.processEvents()
+
+            self.assertEqual(menu.frameGeometry().topLeft(), initial_geometry.topLeft())
+            self.assertLess(menu.frameGeometry().height(), initial_geometry.height())
+
+            tray.log_coordinator.hide_current()
+            QApplication.processEvents()
+
             self.assertEqual(menu.frameGeometry(), initial_geometry)
         finally:
             tray.log_coordinator.shutdown()

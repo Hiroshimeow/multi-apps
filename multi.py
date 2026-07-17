@@ -837,6 +837,7 @@ class SystemTrayApp(QSystemTrayIcon):
         self.menu.setMinimumWidth(0)
         self.menu.setMaximumWidth(16777215)
         self.menu.setMaximumHeight(16777215)
+        self._inline_menu_base_geometry = QRect()
         self.log_coordinator = InlineLogPanelCoordinator(
             self.menu,
             generation=self._menu_generation,
@@ -972,10 +973,28 @@ class SystemTrayApp(QSystemTrayIcon):
         if coordinator is not None and coordinator.current_row is not None:
             panel = coordinator.current_row.inline_log_panel
         panel_is_open = panel is not None and panel.isVisible()
+        base_geometry = getattr(self, "_inline_menu_base_geometry", QRect())
+        if panel_is_open and base_geometry.isNull() and not visible_anchor.isNull():
+            base_geometry = QRect(visible_anchor)
+            self._inline_menu_base_geometry = QRect(base_geometry)
+        elif not panel_is_open and not base_geometry.isNull():
+            menu.setMaximumWidth(16777215)
+            menu.setMaximumHeight(16777215)
+            invalidate_widget_actions()
+            menu.adjustSize()
+            if menu.isVisible():
+                menu.setGeometry(base_geometry)
+            self._inline_menu_base_geometry = QRect()
+            return
+
         panel_height = panel.height() if panel_is_open else 0
         natural = menu.sizeHint()
         base_height = max(1, natural.height() - panel_height)
-        anchor = visible_anchor if not visible_anchor.isNull() else menu.frameGeometry()
+        anchor = (
+            base_geometry
+            if not base_geometry.isNull()
+            else visible_anchor if not visible_anchor.isNull() else menu.frameGeometry()
+        )
         if anchor.isNull():
             anchor = QRect(screen.availableGeometry().bottomRight(), QSize(1, 1))
         geometry = compute_inline_menu_geometry(
