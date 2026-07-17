@@ -109,6 +109,35 @@ class LogPanelPreferenceStoreTests(unittest.TestCase):
         self.assertEqual(self.store.load("demo"), original)
         self.assertFalse(self.path.with_name(self.path.name + ".tmp").exists())
 
+    def test_read_oserror_during_save_preserves_all_existing_apps(self):
+        first = LogPanelPreference(5000, "alpha", "stderr")
+        second = LogPanelPreference(10, "beta", "stdout")
+        self.assertTrue(self.store.save("first", first))
+        self.assertTrue(self.store.save("second", second))
+        before = self.path.read_bytes()
+        original_read_text = Path.read_text
+
+        def fail_target_read(path, *args, **kwargs):
+            if path == self.store.path:
+                raise PermissionError("transient read failure")
+            return original_read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", fail_target_read), patch(
+            "lib.ui.log_preferences.os.replace"
+        ) as replace:
+            self.assertFalse(
+                self.store.save(
+                    "first",
+                    LogPanelPreference(100, "changed", "stdout"),
+                )
+            )
+
+        replace.assert_not_called()
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.store.load("first"), first)
+        self.assertEqual(self.store.load("second"), second)
+        self.assertFalse(self.path.with_name(self.path.name + ".tmp").exists())
+
     def test_hostile_unicode_app_id_is_only_a_json_key(self):
         app_id = "../Ứng dụng/日本語\\..\\escape"
         preference = LogPanelPreference(10, "x", "stderr")

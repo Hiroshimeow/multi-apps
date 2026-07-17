@@ -50,27 +50,42 @@ class LogPanelPreferenceStore:
     def __init__(self, path: str | Path):
         self.path = Path(path).expanduser().resolve(strict=False)
 
-    def _load_apps(self) -> dict[str, LogPanelPreference]:
+    def _read_apps(self) -> tuple[dict[str, LogPanelPreference], bool]:
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return {}
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}, True
+        except (OSError, UnicodeError):
+            return {}, False
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return {}, True
         if not isinstance(payload, dict) or payload.get("version") != _SCHEMA_VERSION:
-            return {}
+            return {}, True
         raw_apps = payload.get("apps")
         if not isinstance(raw_apps, dict):
-            return {}
-        return {
-            app_id: _normalize_preference(value)
-            for app_id, value in raw_apps.items()
-            if isinstance(app_id, str)
-        }
+            return {}, True
+        return (
+            {
+                app_id: _normalize_preference(value)
+                for app_id, value in raw_apps.items()
+                if isinstance(app_id, str)
+            },
+            True,
+        )
+
+    def _load_apps(self) -> dict[str, LogPanelPreference]:
+        apps, _readable = self._read_apps()
+        return apps
 
     def load(self, app_id: str) -> LogPanelPreference:
         return self._load_apps().get(str(app_id), LogPanelPreference())
 
     def save(self, app_id: str, preference: LogPanelPreference) -> bool:
-        apps = self._load_apps()
+        apps, readable = self._read_apps()
+        if not readable:
+            return False
         app_id = str(app_id)
         normalized = _normalize_preference(preference)
         if apps.get(app_id, LogPanelPreference()) == normalized:
