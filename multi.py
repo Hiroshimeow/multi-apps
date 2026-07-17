@@ -34,6 +34,11 @@ from lib.core import AppController
 from lib.runners.command_runner import CommandRunner
 from lib.runtime.single_instance import SingleInstanceLock
 from lib.ui.app_tools import AppToolAction, AppToolService
+from lib.ui.log_preferences import (
+    LogPanelPreference,
+    LogPanelPreferenceStore,
+    default_log_preferences_path,
+)
 from lib.ui.log_reader import (
     BoundedLogReader,
     DEFAULT_MAX_BYTES,
@@ -484,12 +489,15 @@ class AppControlWidget(QWidget):
         parent_menu,
         result_notifier=None,
         coordinator=None,
+        log_preference_store=None,
     ):
         super().__init__()
         self.manager = manager
         self.parent_menu = parent_menu
         self.result_notifier = result_notifier
         self._app_context_menu = None
+        self._shutdown = False
+        self.log_preference_store = log_preference_store
         self.log_coordinator = coordinator or InlineLogPanelCoordinator(parent_menu)
         self._owns_log_coordinator = coordinator is None
 
@@ -578,21 +586,25 @@ class AppControlWidget(QWidget):
         layout.setStretch(0, 1)
 
         self.inline_log_panel = InlineLogPanel(self)
+        preference = (
+            self.log_preference_store.load(self.manager.app_id)
+            if self.log_preference_store is not None
+            else LogPanelPreference()
+        )
+        self.inline_log_panel._suppress_control_signals = True
+        try:
+            self.inline_log_panel.line_count.setValue(preference.line_count)
+            self.inline_log_panel.filter_edit.setText(preference.filter_expression)
+            self.inline_log_panel.set_stream(preference.stream)
+        finally:
+            self.inline_log_panel._suppress_control_signals = False
         root_layout.addWidget(self.top_row)
         root_layout.addWidget(self.inline_log_panel)
         self.log_coordinator.register_row(self)
-        self.btn_ologs.hover_entered.connect(
-            lambda: self.log_coordinator.button_entered(self, "stdout")
-        )
-        self.btn_ologs.hover_left.connect(
-            lambda: self.log_coordinator.button_left(self, "stdout")
-        )
-        self.btn_elogs.hover_entered.connect(
-            lambda: self.log_coordinator.button_entered(self, "stderr")
-        )
-        self.btn_elogs.hover_left.connect(
-            lambda: self.log_coordinator.button_left(self, "stderr")
-        )
+        self.btn_ologs.hover_entered.connect(self._stdout_entered)
+        self.btn_ologs.hover_left.connect(self._stdout_left)
+        self.btn_elogs.hover_entered.connect(self._stderr_entered)
+        self.btn_elogs.hover_left.connect(self._stderr_left)
 
         root_layout.activate()
         self.setMinimumWidth(max(self.top_row.sizeHint().width(), 520))
@@ -601,6 +613,53 @@ class AppControlWidget(QWidget):
         self.timer.timeout.connect(self.update_ui)
         self.timer.start(1000)
         self.update_ui()
+
+    def _stdout_entered(self):
+        self.log_coordinator.button_entered(self, "stdout")
+
+    def _stdout_left(self):
+        self.log_coordinator.button_left(self, "stdout")
+
+    def _stderr_entered(self):
+        self.log_coordinator.button_entered(self, "stderr")
+
+    def _stderr_left(self):
+        self.log_coordinator.button_left(self, "stderr")
+
+    def persist_log_preferences(self):
+        if self._shutdown or self.log_preference_store is None:
+            return False
+        return self.log_preference_store.save(
+            self.manager.app_id,
+            LogPanelPreference(
+                line_count=self.inline_log_panel.line_count.value(),
+                filter_expression=self.inline_log_panel.filter_edit.text(),
+                stream=self.inline_log_panel.stream_label.text(),
+            ),
+        )
+
+    def shutdown(self):
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self.timer.stop()
+        for signal, callback in (
+            (self.btn_ologs.hover_entered, self._stdout_entered),
+            (self.btn_ologs.hover_left, self._stdout_left),
+            (self.btn_elogs.hover_entered, self._stderr_entered),
+            (self.btn_elogs.hover_left, self._stderr_left),
+        ):
+            try:
+                signal.disconnect(callback)
+            except (TypeError, RuntimeError):
+                pass
+        context_menu = self._app_context_menu
+        self._app_context_menu = None
+        if context_menu is not None:
+            context_menu.close()
+            context_menu.deleteLater()
+        if self._owns_log_coordinator:
+            self.log_coordinator.shutdown()
 
     @staticmethod
     def _fit_button_to_caption(button):
@@ -722,9 +781,16 @@ class SystemTrayApp(QSystemTrayIcon):
         instance_lock=None,
         config_path="setting.yaml",
         launcher_argv=None,
+        log_preferences_path=None,
     ):
         super().__init__(icon, parent)
         self.config_path = str(Path(config_path).expanduser().resolve(strict=False))
+        preference_path = (
+            log_preferences_path
+            if log_preferences_path is not None
+            else default_log_preferences_path(self.config_path)
+        )
+        self.log_preference_store = LogPanelPreferenceStore(preference_path)
         if launcher_argv is None:
             parsed = parse_launcher_args(sys.argv)
             launcher_argv = (
@@ -822,6 +888,8 @@ class SystemTrayApp(QSystemTrayIcon):
             self.managers.append(mgr)
 
     def refresh_menu(self):
+        for row in tuple(self.menu.findChildren(AppControlWidget)):
+            row.shutdown()
         old_coordinator = getattr(self, "log_coordinator", None)
         if old_coordinator is not None:
             old_coordinator.shutdown()
@@ -869,6 +937,7 @@ class SystemTrayApp(QSystemTrayIcon):
                     self.menu,
                     getattr(self, "notify_app_tool_failure", None),
                     self.log_coordinator,
+                    getattr(self, "log_preference_store", None),
                 )
                 action.setDefaultWidget(widget)
                 self.menu.addAction(action)
@@ -1017,6 +1086,9 @@ class SystemTrayApp(QSystemTrayIcon):
 
     def refresh_all(self):
         """Reload config and refresh menu."""
+        menu = getattr(self, "menu", None)
+        if menu is not None:
+            menu.close()
         self.managers = []
         self.load_config()
         self.refresh_menu()

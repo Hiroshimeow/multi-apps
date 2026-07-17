@@ -371,6 +371,7 @@ class InlineLogPanelCoordinatorTests(unittest.TestCase):
         manager.get_log_snapshot.side_effect = list(snapshots)
         row = MagicMock()
         row.manager = manager
+        row.persist_log_preferences = MagicMock()
         row.inline_log_panel = InlineLogPanel()
         row.inline_log_panel.setParent(None)
         return row
@@ -470,6 +471,64 @@ class InlineLogPanelCoordinatorTests(unittest.TestCase):
         QApplication.processEvents()
         self.assertEqual(row.manager.get_log_snapshot.call_args.kwargs["max_lines"], 5000)
         coordinator.shutdown()
+
+    def test_filter_line_count_and_stream_changes_persist_but_same_stream_reentry_does_not(self):
+        row = self.make_row(
+            "one",
+            [
+                ready_snapshot("out"),
+                ready_snapshot("filtered"),
+                ready_snapshot("stderr"),
+            ],
+        )
+        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=1000, hide_delay_ms=30)
+        coordinator.request_open(row, "stdout")
+        row.persist_log_preferences.reset_mock()
+
+        row.inline_log_panel.filter_edit.setText("alpha")
+        QApplication.processEvents()
+        self.assertEqual(row.persist_log_preferences.call_count, 1)
+
+        row.inline_log_panel.line_count.setValue(5000)
+        QApplication.processEvents()
+        self.assertEqual(row.persist_log_preferences.call_count, 2)
+
+        coordinator.request_open(row, "stderr")
+        self.assertEqual(row.persist_log_preferences.call_count, 3)
+        self.assertEqual(row.inline_log_panel.stream_label.text(), "stderr")
+
+        coordinator.request_open(row, "stderr")
+        self.assertEqual(row.persist_log_preferences.call_count, 3)
+        coordinator.shutdown()
+
+    def test_shutdown_disconnects_all_old_panel_callbacks_and_is_idempotent(self):
+        row = self.make_row("one", [ready_snapshot("one"), ready_snapshot("unexpected")])
+        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=20, hide_delay_ms=15)
+        visibility_changed = MagicMock()
+        coordinator.panel_visibility_changed.connect(visibility_changed)
+        coordinator.request_open(row, "stdout")
+
+        coordinator.shutdown()
+        coordinator.shutdown()
+        visibility_changed.reset_mock()
+        row.manager.get_log_snapshot.reset_mock()
+        row.persist_log_preferences.reset_mock()
+
+        row.inline_log_panel.pointer_entered.emit()
+        row.inline_log_panel.pointer_left.emit()
+        row.inline_log_panel.filter_edit.setText("after-shutdown")
+        row.inline_log_panel.line_count.setValue(5000)
+        QApplication.processEvents()
+        QTest.qWait(30)
+
+        self.assertFalse(coordinator.refresh_timer.isActive())
+        self.assertFalse(coordinator.hide_timer.isActive())
+        self.assertIsNone(coordinator.current_row)
+        self.assertEqual(coordinator._registered_rows, set())
+        self.assertEqual(coordinator._row_callbacks, {})
+        row.manager.get_log_snapshot.assert_not_called()
+        row.persist_log_preferences.assert_not_called()
+        visibility_changed.assert_not_called()
 
 
 class InlineMenuGeometryTests(unittest.TestCase):

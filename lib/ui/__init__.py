@@ -19,6 +19,11 @@ from .log_filter import (
     highlight_ranges,
     parse_filter_expression,
 )
+from .log_preferences import (
+    LogPanelPreference,
+    LogPanelPreferenceStore,
+    default_log_preferences_path,
+)
 from .log_reader import (
     DEFAULT_MAX_BYTES,
     DEFAULT_TAIL_LINES,
@@ -68,6 +73,9 @@ __all__ = [
     "apply_log_filter",
     "highlight_ranges",
     "parse_filter_expression",
+    "LogPanelPreference",
+    "LogPanelPreferenceStore",
+    "default_log_preferences_path",
     "DEFAULT_MAX_BYTES",
     "DEFAULT_TAIL_LINES",
     "MAX_READ_BYTES",

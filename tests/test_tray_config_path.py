@@ -13,7 +13,12 @@ import yaml
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
-from multi import SystemTrayApp, parse_launcher_args
+from lib.ui.log_preferences import (
+    LogPanelPreference,
+    LogPanelPreferenceStore,
+    default_log_preferences_path,
+)
+from multi import AppControlWidget, SystemTrayApp, parse_launcher_args
 
 
 _QT_APP = QApplication.instance() or QApplication([])
@@ -124,6 +129,85 @@ class LauncherConfigPathTests(unittest.TestCase):
                     tray.controller.config_manager.config_path,
                     str(supplied.resolve(strict=False)),
                 )
+            finally:
+                self._dispose_tray(tray)
+
+    def test_temporary_config_uses_adjacent_default_preference_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            supplied = self._write_config(root, "Adjacent")
+            tray = SystemTrayApp(
+                QIcon(),
+                config_path=str(supplied),
+                launcher_argv=("multi.py", "--config", str(supplied)),
+            )
+            try:
+                self.assertEqual(
+                    tray.log_preference_store.path,
+                    default_log_preferences_path(supplied),
+                )
+                self.assertFalse(tray.log_preference_store.path.exists())
+            finally:
+                self._dispose_tray(tray)
+
+    def test_injected_preference_path_restores_values_after_menu_rebuild(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            supplied = self._write_config(root, "Before")
+            preference_path = root / "evidence" / "preferences.json"
+            tray = SystemTrayApp(
+                QIcon(),
+                config_path=str(supplied),
+                launcher_argv=("multi.py", "--config", str(supplied)),
+                log_preferences_path=preference_path,
+            )
+            try:
+                row = tray.menu.findChild(AppControlWidget)
+                tray.log_coordinator.request_open(row, "stdout")
+                row.inline_log_panel.line_count.setValue(5000)
+                row.inline_log_panel.filter_edit.setText("[alpha,!drop-me]")
+                tray.log_coordinator.request_open(row, "stderr")
+                QApplication.processEvents()
+
+                tray.refresh_menu()
+                QApplication.processEvents()
+                restored = tray.menu.findChild(AppControlWidget)
+
+                self.assertIsNot(restored, row)
+                self.assertEqual(restored.inline_log_panel.line_count.value(), 5000)
+                self.assertEqual(
+                    restored.inline_log_panel.filter_edit.text(), "[alpha,!drop-me]"
+                )
+                self.assertEqual(restored.inline_log_panel.stream_label.text(), "stderr")
+                self.assertEqual(
+                    LogPanelPreferenceStore(preference_path).load("before"),
+                    LogPanelPreference(5000, "[alpha,!drop-me]", "stderr"),
+                )
+            finally:
+                self._dispose_tray(tray)
+
+    def test_invalid_preference_falls_back_without_changing_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            supplied = self._write_config(root, "Stable")
+            before = supplied.read_bytes()
+            preference_path = root / "preferences.json"
+            preference_path.write_text(
+                '{"version":1,"apps":{"stable":{"line_count":0,"filter_expression":4,"stream":"bad"}}}',
+                encoding="utf-8",
+            )
+            tray = SystemTrayApp(
+                QIcon(),
+                config_path=str(supplied),
+                launcher_argv=("multi.py", "--config", str(supplied)),
+                log_preferences_path=preference_path,
+            )
+            try:
+                row = tray.menu.findChild(AppControlWidget)
+                self.assertEqual(row.inline_log_panel.line_count.value(), 100)
+                self.assertEqual(row.inline_log_panel.filter_edit.text(), "")
+                self.assertEqual(row.inline_log_panel.stream_label.text(), "stdout")
+                self.assertEqual(supplied.read_bytes(), before)
             finally:
                 self._dispose_tray(tray)
 

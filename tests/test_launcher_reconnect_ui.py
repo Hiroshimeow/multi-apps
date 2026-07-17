@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import gc
 import subprocess
 import sys
 import tempfile
@@ -11,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from PyQt6.QtCore import QPoint, QRect, Qt
+from PyQt6.QtCore import QCoreApplication, QEvent, QPoint, QRect, Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QMenu, QWidgetAction
 
 from lib.core import AppController
@@ -19,6 +20,7 @@ from lib.runtime.models import RunRecord
 from lib.runtime.process_identity import get_process_created_at
 from lib.session.subprocess_session import SubprocessSessionManager
 from lib.ui.inline_log_panel import InlineLogPanelCoordinator
+from lib.ui.log_preferences import LogPanelPreference, LogPanelPreferenceStore
 from lib.ui.log_reader import LogSnapshot, LogSnapshotState
 from multi import AppControlWidget, AppManager, SystemTrayApp
 
@@ -242,10 +244,10 @@ class AutoStartDecisionTests(unittest.TestCase):
 
 
 class RecoveredUiStateTests(unittest.TestCase):
-    def _manager(self, status_info, multi_run=False, name="Demo"):
+    def _manager(self, status_info, multi_run=False, name="Demo", app_id="demo"):
         controller = MagicMock()
         controller.config_manager.get_app.return_value = {
-            "id": "demo",
+            "id": app_id,
             "name": name,
             "multi_run": multi_run,
         }
@@ -269,6 +271,150 @@ class RecoveredUiStateTests(unittest.TestCase):
         if getattr(widget, "_owns_log_coordinator", False):
             widget.log_coordinator.shutdown()
         widget.deleteLater()
+
+    @staticmethod
+    def _flush_deferred_deletes():
+        QApplication.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.processEvents()
+        gc.collect()
+
+    def test_row_restores_preferences_per_app_without_constructor_write(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = LogPanelPreferenceStore(Path(temp_dir) / "preferences.json")
+            store.save(
+                "first",
+                LogPanelPreference(5000, "[alpha,!drop-me]", "stderr"),
+            )
+            menu = QMenu()
+            coordinator = InlineLogPanelCoordinator(menu)
+            with patch.object(store, "save", wraps=store.save) as save:
+                first = AppControlWidget(
+                    self._manager(
+                        {"status": "STOPPED", "instances": 0},
+                        name="First",
+                        app_id="first",
+                    ),
+                    menu,
+                    coordinator=coordinator,
+                    log_preference_store=store,
+                )
+                second = AppControlWidget(
+                    self._manager(
+                        {"status": "STOPPED", "instances": 0},
+                        name="Second",
+                        app_id="second",
+                    ),
+                    menu,
+                    coordinator=coordinator,
+                    log_preference_store=store,
+                )
+            try:
+                self.assertEqual(first.inline_log_panel.line_count.value(), 5000)
+                self.assertEqual(
+                    first.inline_log_panel.filter_edit.text(), "[alpha,!drop-me]"
+                )
+                self.assertEqual(first.inline_log_panel.stream_label.text(), "stderr")
+                self.assertEqual(second.inline_log_panel.line_count.value(), 100)
+                self.assertEqual(second.inline_log_panel.filter_edit.text(), "")
+                self.assertEqual(second.inline_log_panel.stream_label.text(), "stdout")
+                save.assert_not_called()
+            finally:
+                first.shutdown()
+                second.shutdown()
+                coordinator.shutdown()
+                first.deleteLater()
+                second.deleteLater()
+                menu.deleteLater()
+                self._flush_deferred_deletes()
+
+    def test_widget_shutdown_stops_timer_closes_context_menu_and_is_idempotent(self):
+        menu = QMenu()
+        widget = AppControlWidget(
+            self._manager({"status": "STOPPED", "instances": 0}),
+            menu,
+        )
+        context = QMenu(widget)
+        context.addAction("Action")
+        widget._app_context_menu = context
+        context.aboutToHide.connect(
+            lambda current=context: widget._release_app_context_menu(current)
+        )
+        context.popup(QPoint(50, 50))
+        QApplication.processEvents()
+        self.assertTrue(widget.timer.isActive())
+        self.assertTrue(context.isVisible())
+
+        widget.shutdown()
+        widget.shutdown()
+        QApplication.processEvents()
+
+        self.assertFalse(widget.timer.isActive())
+        self.assertIsNone(widget._app_context_menu)
+        with self.assertRaises(RuntimeError):
+            context.isVisible()
+        widget.deleteLater()
+        menu.deleteLater()
+        self._flush_deferred_deletes()
+
+    def test_refresh_all_closes_visible_menu_before_rebuilding_rows(self):
+        events = []
+        tray = SimpleNamespace(
+            menu=SimpleNamespace(close=lambda: events.append("close")),
+            managers=[object()],
+            load_config=lambda: events.append("load"),
+            refresh_menu=lambda: events.append("refresh"),
+        )
+
+        SystemTrayApp.refresh_all(tray)
+
+        self.assertEqual(events, ["close", "load", "refresh"])
+        self.assertEqual(tray.managers, [])
+
+    def test_one_hundred_refresh_cycles_leave_exactly_one_live_ui_set(self):
+        managers = [
+            self._manager(
+                {"status": "STOPPED", "instances": 0},
+                name=f"Demo {index:02d}",
+                app_id=f"demo-{index:02d}",
+            )
+            for index in range(11)
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            menu = QMenu()
+            tray = SimpleNamespace(
+                menu=menu,
+                managers=managers,
+                refresh_all=lambda: None,
+                stop_all_apps=lambda: None,
+                restart_app=lambda: None,
+                exit_app=lambda: None,
+                _menu_generation=0,
+                log_preference_store=LogPanelPreferenceStore(
+                    Path(temp_dir) / "preferences.json"
+                ),
+            )
+            try:
+                for _ in range(100):
+                    SystemTrayApp.refresh_menu(tray)
+                    self._flush_deferred_deletes()
+                rows = menu.findChildren(AppControlWidget)
+                coordinators = menu.findChildren(InlineLogPanelCoordinator)
+                timers = menu.findChildren(QTimer)
+                self.assertEqual(len(rows), 11)
+                self.assertEqual(len(coordinators), 1)
+                self.assertIs(coordinators[0], tray.log_coordinator)
+                self.assertEqual(sum(row.timer.isActive() for row in rows), 11)
+                self.assertEqual(len(timers), 13)
+                self.assertIsNotNone(tray.log_coordinator.refresh_timer)
+                self.assertIsNotNone(tray.log_coordinator.hide_timer)
+            finally:
+                for row in menu.findChildren(AppControlWidget):
+                    row.shutdown()
+                tray.log_coordinator.shutdown()
+                menu.clear()
+                menu.deleteLater()
+                self._flush_deferred_deletes()
 
     def test_running_primary_text_is_elapsed_only_green_and_instances_in_tooltip(self):
         single_info = {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 from PyQt6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QSyntaxHighlighter, QTextCharFormat, QTextCursor
@@ -616,6 +617,8 @@ class InlineLogPanelCoordinator(QObject):
         self._button_hovered = False
         self._panel_hovered = False
         self._registered_rows = set()
+        self._row_callbacks = {}
+        self._shutdown = False
 
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setInterval(int(refresh_interval_ms))
@@ -627,21 +630,31 @@ class InlineLogPanelCoordinator(QObject):
         QApplication.instance().focusChanged.connect(self._focus_changed)
 
     def register_row(self, row):
+        if self._shutdown:
+            return
         key = id(row)
         if key in self._registered_rows:
             return
         self._registered_rows.add(key)
         panel = row.inline_log_panel
-        panel.pointer_entered.connect(lambda current=row: self.panel_entered(current))
-        panel.pointer_left.connect(lambda current=row: self.panel_left(current))
-        panel.filter_changed.connect(lambda current=row: self._filter_changed(current))
-        panel.line_count_changed.connect(
-            lambda _value, current=row: self._line_count_changed(current)
+        callbacks = (
+            (panel.pointer_entered, partial(self.panel_entered, row)),
+            (panel.pointer_left, partial(self.panel_left, row)),
+            (panel.filter_changed, partial(self._filter_changed, row)),
+            (
+                panel.line_count_changed,
+                partial(self._line_count_signal, row),
+            ),
         )
+        for signal, callback in callbacks:
+            signal.connect(callback)
+        self._row_callbacks[key] = callbacks
 
     def request_open(self, row, stream):
         if stream not in {"stdout", "stderr"}:
             raise ValueError("stream must be stdout or stderr")
+        if self._shutdown:
+            return
         self.register_row(row)
         self.hide_timer.stop()
         same_row = row is self.current_row
@@ -656,8 +669,10 @@ class InlineLogPanelCoordinator(QObject):
         self.current_row = row
         self.current_stream = stream
         self._button_hovered = True
-        if not same_stream:
+        stream_changed = row.inline_log_panel.stream_label.text() != stream
+        if stream_changed:
             row.inline_log_panel.set_stream(stream)
+            self._persist_row(row)
         row.inline_log_panel.show()
         self.panel_visibility_changed.emit(True)
         self.refresh_current(reset_bottom=not same_stream)
@@ -709,13 +724,24 @@ class InlineLogPanelCoordinator(QObject):
         if not self._keep_open():
             self.hide_current()
 
+    @staticmethod
+    def _persist_row(row):
+        persist = getattr(row, "persist_log_preferences", None)
+        if callable(persist):
+            persist()
+
     def _filter_changed(self, row):
         if row is self.current_row:
             row.inline_log_panel.apply_cached_filter(reset_bottom=True)
+            self._persist_row(row)
+
+    def _line_count_signal(self, row, _value):
+        self._line_count_changed(row)
 
     def _line_count_changed(self, row):
         if row is self.current_row:
             self.refresh_current(reset_bottom=True)
+            self._persist_row(row)
 
     def refresh_current(self, *, reset_bottom=False):
         if self.current_row is None:
@@ -745,10 +771,33 @@ class InlineLogPanelCoordinator(QObject):
         self.hide_current()
 
     def shutdown(self):
+        if self._shutdown:
+            return
+        self._shutdown = True
         self._active_generation += 1
         self.hide_current()
+        application = QApplication.instance()
+        if application is not None:
+            try:
+                application.focusChanged.disconnect(self._focus_changed)
+            except (TypeError, RuntimeError):
+                pass
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "aboutToHide"):
+            try:
+                parent.aboutToHide.disconnect(self.close_for_menu_hide)
+            except (TypeError, RuntimeError):
+                pass
+        for callbacks in tuple(self._row_callbacks.values()):
+            for signal, callback in callbacks:
+                try:
+                    signal.disconnect(callback)
+                except (TypeError, RuntimeError):
+                    pass
+        self._row_callbacks.clear()
+        self._registered_rows.clear()
         try:
-            QApplication.instance().focusChanged.disconnect(self._focus_changed)
+            self.panel_visibility_changed.disconnect()
         except (TypeError, RuntimeError):
             pass
 
