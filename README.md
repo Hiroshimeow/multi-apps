@@ -1,6 +1,7 @@
 # Multi-Run Apps
 
 `multi-run-apps` là control panel và process registry để chạy nhiều ứng dụng cục bộ từ System Tray trên Windows hoặc từ CLI/TUI trên Linux.
+<img width="648" height="520" alt="{726DBEEE-F798-435E-B871-A29D4FB4F918}" src="https://github.com/user-attachments/assets/ae9943b5-945a-4caf-9155-ad5fce6b9c9b" />
 
 Launcher không quyết định vòng đời của ứng dụng chỉ vì cửa sổ launcher đang mở. Mỗi lần Start trong chế độ `subprocess` tạo một supervisor riêng cho run đó. Supervisor giữ process tree, IPC và log handles; launcher có thể Restart, Exit hoặc bị đóng mà ứng dụng vẫn tiếp tục chạy.
 
