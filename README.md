@@ -87,6 +87,7 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools: []
 ```
 
 Lệnh thực tế:
@@ -111,6 +112,7 @@ uv run main.py --repo E:/python_project --port 8000
 | `args_edit` | `false` | Mở argument editor chỉ khi Start thủ công từ tray GUI. |
 | `close_timeout` | `5.0` giây | Thời gian graceful Stop trước khi force-close complete tree. Phải lớn hơn 0. |
 | `os` | mọi OS hỗ trợ | Lọc theo `win`, `windows`, `win10`, `win11`, `linux`, `ubuntu` hoặc `debian`. |
+| `tools` | `[]` | Các file mở nhanh trong menu chuột phải của app. Chỉ hỗ trợ `type: open_file`; không chạy shell command. |
 
 ### Các trường global
 
@@ -121,6 +123,25 @@ uv run main.py --repo E:/python_project --port 8000
 | `multi_run` | `false` | Giá trị fallback cho app cũ không khai báo `multi_run`; file mẫu hiện khai báo lại field này ở từng app. |
 
 Các path tương đối được resolve từ thư mục chứa file config.
+
+## App tools và thao tác trên tên app
+
+Tên app trong tray có hai thao tác tách biệt:
+
+- nhấp trái mở working directory của app;
+- nhấp phải, phím Menu hoặc `Shift+F10` mở menu công cụ của riêng app.
+
+Menu luôn có **Open folder** và **Open terminal here**. Terminal được mở tại đúng working directory; launcher không đổi working directory toàn cục. Các mục bổ sung lấy từ `tools`:
+
+```yaml
+tools:
+  - id: "open-launcher-readme"
+    type: "open_file"
+    label: "Open launcher README"
+    path: "README.md"
+```
+
+`path` tương đối trong `tools` được resolve từ working directory của app. Hiện chỉ hỗ trợ `type: open_file`; launcher không cung cấp tool chạy shell command tùy ý. File hoặc terminal không khả dụng sẽ hiện disabled cùng tooltip giải thích, thay vì thử chạy mù.
 
 ### Cách viết `args`
 
@@ -189,7 +210,21 @@ logs/<app_id>/<run_id>.out.log
 logs/<app_id>/<run_id>.err.log
 ```
 
-Supervisor giữ log handles, vì vậy log tiếp tục được ghi khi launcher Restart, Exit hoặc crash. Tray dùng run active mới nhất làm log target; khi không còn run active, nó dùng historical run mới nhất. Hover trên **O.Logs** hoặc **E.Logs** hiển thị tail đang cập nhật của cùng file.
+Supervisor giữ log handles, vì vậy log tiếp tục được ghi khi launcher Restart, Exit hoặc crash. Tray dùng run active mới nhất làm log target; khi không còn run active, nó dùng historical run mới nhất.
+
+## Inline live logs
+
+Hover trên **O.Logs** hoặc **E.Logs** mở một panel log ngay dưới đúng app row; tại một thời điểm chỉ có một panel. Nhấp nút vẫn mở file log như trước. Panel cập nhật theo chu kỳ 500 ms và có các điều khiển:
+
+- stream `stdout` hoặc `stderr` theo nút đang hover;
+- **Lines** mặc định **100 dòng**, cho phép **10–5000**;
+- **Filter** dùng các term literal, không phải regex và không render HTML.
+
+Filter có thể viết `alpha,beta,!drop-me` hoặc `[alpha,beta,!drop-me]`. Dòng được giữ khi chứa ít nhất một positive term; term có tiền tố `!` loại dòng. Positive term được highlight trên nguyên văn log. Dấu phẩy bên trong term không được hỗ trợ.
+
+Khi viewport đang ở cuối, log mới tự follow và trạng thái là `Live`. Cuộn lên sẽ giữ vị trí đọc và đổi trạng thái thành `Live paused while scrolled`; cuộn về cuối tự tiếp tục follow. Selection, caret và kết quả copy được giữ qua append tương thích.
+
+Mỗi app lưu riêng line count, filter và stream gần nhất trong `.runtime/ui-log-preferences.json` nằm cạnh file config. File này được ghi atomic. Config thiếu/hỏng dùng default; lỗi đọc I/O không được phép ghi đè preference hợp lệ đang có.
 
 ## Cài đặt và chạy
 

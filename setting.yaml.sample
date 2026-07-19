@@ -33,6 +33,9 @@
 #                   phải lớn hơn 0.
 #   os            : string hoặc list; hỗ trợ win, windows, win10, win11, linux,
 #                   ubuntu, debian.
+#   tools         : danh sách file mở nhanh trong menu chuột phải; không dùng shell.
+#                   Không có tool: `tools: []`. Tool hợp lệ dùng `type: open_file`,
+#                   `label`, `path`, và `id` ổn định (có thể bỏ để tự sinh).
 # =============================================================================
 
 global:
@@ -52,6 +55,7 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools: []
 
   - id: "auto-suggest"
     name: "Auto Suggest"
@@ -64,6 +68,7 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools: []
 
   - id: "copy-content"
     name: "Copy-Content"
@@ -76,6 +81,7 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools: []
 
   - id: "advance-clipboard"
     name: "Advance-Clipboard"
@@ -88,6 +94,7 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools: []
 
   - id: "tampermonkey-auto"
     name: "Tampermonkey-Auto"
@@ -100,6 +107,7 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools: []
 
   - id: "tampermonkey-main-py"
     name: "tampermonkey-main.py"
@@ -111,6 +119,7 @@ apps:
     args_edit: true
     close_timeout: 5.0
     os: "win11"
+    tools: []
     args:
       - "--timeout 1800"
       # - "--preflight"
@@ -128,6 +137,7 @@ apps:
     args_edit: true
     close_timeout: 5.0
     os: "win11"
+    tools: []
     args:
       - "--timeout 1800"
       # - "--preflight"
@@ -146,6 +156,7 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools: []
 
   - id: "hport-mcp-thinkbook"
     name: "hport-mcp-thinkbook"
@@ -158,6 +169,11 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools:
+      - id: "open-launcher-readme"
+        type: "open_file"
+        label: "Open launcher README"
+        path: "README.md"
 
   - id: "lan-drive"
     name: "LAN-Drive"
@@ -171,6 +187,7 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools: []
 
   - id: "pdf-2-png-converter"
     name: "PDF 2 PNG Converter"
@@ -183,3 +200,4 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
+    tools: []
