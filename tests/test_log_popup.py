@@ -9,7 +9,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 from lib.ui.inline_log_panel import InlineLogPanel
-from lib.ui.log_popup import LogPopupWindow, compute_log_popup_rect
+from lib.ui.log_popup import PinnedLogWindow, LogPopupWindow, compute_log_popup_rect
 from lib.ui.tray_panel import TrayPanelWindow
 
 
@@ -35,6 +35,42 @@ class LogPopupGeometryTests(unittest.TestCase):
 
 
 class LogPopupWindowTests(unittest.TestCase):
+    def test_transient_popup_remains_frameless(self):
+        popup = LogPopupWindow()
+        try:
+            self.assertTrue(popup.windowFlags() & Qt.WindowType.FramelessWindowHint)
+        finally:
+            popup.deleteLater()
+            QApplication.processEvents()
+
+    def test_pinned_window_uses_native_frame_and_emits_close_request(self):
+        window = PinnedLogWindow()
+        close_requests = []
+        window.close_requested.connect(lambda: close_requests.append(True))
+        window.set_source_title("Demo App", "stdout")
+        window.resize(640, 240)
+        window.show()
+        QApplication.processEvents()
+        try:
+            flags = window.windowFlags()
+            self.assertTrue(flags & Qt.WindowType.Tool)
+            self.assertTrue(flags & Qt.WindowType.WindowStaysOnTopHint)
+            self.assertFalse(flags & Qt.WindowType.FramelessWindowHint)
+            self.assertNotEqual(window.maximumWidth(), window.minimumWidth())
+            self.assertNotEqual(window.maximumHeight(), window.minimumHeight())
+            self.assertEqual(len(window.findChildren(InlineLogPanel)), 1)
+            self.assertIs(window.panel, window.findChild(InlineLogPanel))
+            self.assertIn("Demo App", window.windowTitle())
+            self.assertIn("stdout", window.windowTitle())
+
+            window.close()
+            QApplication.processEvents()
+            self.assertEqual(close_requests, [True])
+        finally:
+            window.hide()
+            window.deleteLater()
+            QApplication.processEvents()
+
     def test_popup_owns_exactly_one_panel_and_does_not_move_tray_panel(self):
         tray_panel = TrayPanelWindow()
         tray_panel.show_at(QRect(1880, 1000, 32, 32), QRect(0, 0, 1920, 1032))

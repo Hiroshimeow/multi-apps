@@ -25,7 +25,7 @@ from .log_filter import (
 from .lifecycle_commands import BackgroundCommandExecutor, LifecycleCommandController
 from .log_hover import LatestLogReader, LogHoverController, LogTarget
 from .log_preference_owner import LogPreferenceOwner
-from .log_popup import LogPopupWindow, compute_log_popup_rect
+from .log_popup import LogPopupWindow, PinnedLogWindow, compute_log_popup_rect
 from .pinned_logs import (
     MultiLogReader,
     PinnedLogManager,
@@ -88,6 +88,7 @@ __all__ = [
     "LogPreferenceOwner",
     "LogPanelPreferenceStore",
     "LogPopupWindow",
+    "PinnedLogWindow",
     "LogRangeHighlighter",
     "LogReader",
     "LogSnapshot",

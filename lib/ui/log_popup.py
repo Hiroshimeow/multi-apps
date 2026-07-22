@@ -3,7 +3,11 @@ from __future__ import annotations
 from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QVBoxLayout
 
-from .inline_log_panel import InlineLogPanel, PANEL_PREFERRED_HEIGHT
+from .inline_log_panel import (
+    InlineLogPanel,
+    PANEL_EMERGENCY_MIN_HEIGHT,
+    PANEL_PREFERRED_HEIGHT,
+)
 
 POPUP_MARGIN = 12
 POPUP_RIGHT_MARGIN = 0
@@ -41,15 +45,25 @@ class LogPopupWindow(QFrame):
     hidden = pyqtSignal()
     reserved_height = PANEL_PREFERRED_HEIGHT + POPUP_PANEL_GAP
 
-    def __init__(self, parent=None):
-        flags = (
+    def __init__(
+        self,
+        parent=None,
+        *,
+        window_flags=None,
+        object_name="logPopupWindow",
+        show_without_activating=True,
+    ):
+        flags = window_flags or (
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
         super().__init__(parent, flags)
-        self.setObjectName("logPopupWindow")
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setObjectName(object_name)
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_ShowWithoutActivating,
+            bool(show_without_activating),
+        )
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
         layout = QVBoxLayout(self)
@@ -89,8 +103,36 @@ class LogPopupWindow(QFrame):
         super().hideEvent(event)
 
 
+class PinnedLogWindow(LogPopupWindow):
+    close_requested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        flags = (
+            Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        super().__init__(
+            parent,
+            window_flags=flags,
+            object_name="pinnedLogWindow",
+            show_without_activating=False,
+        )
+        self.setMinimumSize(520, PANEL_EMERGENCY_MIN_HEIGHT)
+
+    def set_source_title(self, name, stream):
+        self.setWindowTitle(f"{str(name).strip()} — {stream}")
+
+    def closeEvent(self, event):
+        self.close_requested.emit()
+        event.ignore()
+
+
 __all__ = [
     "LogPopupWindow",
+    "PinnedLogWindow",
     "POPUP_MARGIN",
     "POPUP_PANEL_GAP",
     "POPUP_RIGHT_MARGIN",
