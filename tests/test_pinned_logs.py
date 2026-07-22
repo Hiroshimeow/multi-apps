@@ -13,6 +13,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 from lib.ui.log_hover import LogTarget
+from lib.ui.log_popup import PinnedLogWindow
 from lib.ui.log_preferences import LogPanelPreferenceStore
 from lib.ui.pinned_logs import (
     MultiLogReader,
@@ -173,6 +174,24 @@ class PinnedLogGeometryTests(unittest.TestCase):
 
 
 class PinnedLogManagerTests(unittest.TestCase):
+    def test_frame_alignment_preserves_requested_right_and_bottom_after_minimum_growth(self):
+        window = PinnedLogWindow()
+        window.show()
+        QApplication.processEvents()
+        try:
+            target = QRect(800, 500, 500, 96)
+            actual = PinnedLogManager._set_frame_geometry(window, target)
+            QApplication.processEvents()
+
+            self.assertEqual(actual.right(), target.right())
+            self.assertEqual(actual.bottom(), target.bottom())
+            self.assertGreaterEqual(actual.width(), window.minimumWidth())
+            self.assertGreaterEqual(actual.height(), window.minimumHeight())
+        finally:
+            window.hide()
+            window.deleteLater()
+            QApplication.processEvents()
+
     def test_user_geometry_is_preserved_and_only_inaccessible_windows_recover(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

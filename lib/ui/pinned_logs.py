@@ -5,7 +5,7 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QObject, QRect, QSize, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
 
 from .inline_log_panel import PANEL_EMERGENCY_MIN_HEIGHT, PANEL_PREFERRED_HEIGHT
@@ -516,10 +516,17 @@ class PinnedLogManager(QObject):
             max(window.minimumHeight(), target.height() - vertical_frame),
         )
         current = window.frameGeometry()
-        window.move(
-            window.x() + target.left() - current.left(),
-            window.y() + target.top() - current.top(),
+        frame_position = QPoint(
+            target.right() - current.width() + 1,
+            target.bottom() - current.height() + 1,
         )
+        handle = window.windowHandle()
+        if handle is not None:
+            handle.setFramePosition(frame_position)
+            QGuiApplication.sync()
+        else:
+            delta = frame_position - current.topLeft()
+            window.move(window.pos() + delta)
         return QRect(window.frameGeometry())
 
     def place_initial(self, session):
