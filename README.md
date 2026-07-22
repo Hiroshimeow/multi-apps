@@ -4,6 +4,9 @@
 
 Launcher không quyết định vòng đời của ứng dụng chỉ vì cửa sổ launcher đang mở. Mỗi lần Start trong chế độ `subprocess` tạo một supervisor riêng cho run đó. Supervisor giữ process tree, IPC và log handles; launcher có thể Restart, Exit hoặc bị đóng mà ứng dụng vẫn tiếp tục chạy.
 
+<img width="664" height="830" alt="{A2498988-CF13-4303-ACDB-C3D11863A281}" src="https://github.com/user-attachments/assets/4e8bd747-3387-4352-a6b5-25cb641d03ce" />
+
+
 ## Hành vi vòng đời
 
 ### Restart, Exit và launcher crash
