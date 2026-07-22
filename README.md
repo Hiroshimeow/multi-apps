@@ -125,7 +125,7 @@ Các path tương đối được resolve từ thư mục chứa file config.
 
 ## Thao tác trong tray
 
-Chuột phải icon tray mở `TrayPanelWindow`, một cửa sổ Qt độc lập thay vì nhét widget tương tác vào `QMenu`.
+Chuột phải icon tray mở `TrayPanelWindow`, một cửa sổ Qt độc lập thay vì nhét widget tương tác vào `QMenu`. Tray panel được đặt sát mép phải của usable screen đang chứa tray icon.
 
 - nhấp trái tên app để mở working directory của app;
 - nhấp phải tên app, phím Menu hoặc `Shift+F10` mở popup riêng có **Open terminal here**;
@@ -207,7 +207,7 @@ Supervisor giữ log handles, vì vậy log tiếp tục được ghi khi launch
 
 ## Inline live logs
 
-Hover trên **O.Logs** hoặc **E.Logs** mở một popup độc lập tại vị trí cố định ngay phía trên tray panel. `LogPopupWindow` là top-level window riêng và chỉ sở hữu một `InlineLogPanel`, bất kể config có bao nhiêu app. Việc mở, chuyển stream hoặc ẩn popup không thay đổi geometry của tray panel và không rebuild app rows. Nhấp nút vẫn mở file log bằng ứng dụng mặc định.
+Hover trên **O.Logs** hoặc **E.Logs** mở một popup độc lập tại vị trí cố định ngay phía trên tray panel. Tray panel và transient log popup đều nằm sát mép phải của usable screen. `LogPopupWindow` là top-level window riêng và chỉ sở hữu một `InlineLogPanel`, bất kể config có bao nhiêu app. Việc mở, chuyển stream hoặc ẩn popup không thay đổi geometry của tray panel và không rebuild app rows. Nhấp nút vẫn mở file log bằng ứng dụng mặc định.
 
 Flow hiển thị được tách thành các block:
 
@@ -226,9 +226,9 @@ Popup có các điều khiển:
 - stream `stdout` hoặc `stderr` theo nút đang hover;
 - **Lines** mặc định **100 dòng**, cho phép **10–5000**;
 - **Filter** dùng các term literal, không phải regex và không render HTML;
-- **PIN** tạo một live-log window độc lập. Nhấn **UNPIN** trên chính window đ³ để bỏ ghim.
+- **PIN** tạo một native live-log tool window độc lập. Nhấn **UNPIN** hoặc nút Close native trên chính window đó để bỏ ghim đúng app/stream.
 
-Pinned logs tiếp tục refresh mỗi 500 ms ngay cả khi tray panel đã ẩn. Có thể pin nhiều app/stream cùng lúc; các window được xếp từ dưới lên trên và chuyển sang cột kế bên khi không còn đủ chiều cao, vì vậy không chồng lên nhau. Pinned logs dùng chung một background reader có pending request riêng theo `(app_id, stream)`, không tạo một worker thread cho mỗi window.
+Pinned logs tiếp tục refresh mỗi 500 ms ngay cả khi tray panel đã ẩn và không bị outside click đóng. Mỗi pinned window có thể move và resize tự do bằng title bar và viền native của hệ điều hành. Vị trí mặc định của pin mới ưu tiên sát mép phải để các pin không chồng lên nhau khi còn đủ chỗ; launcher không tự động reset geometry đã được người dùng điều chỉnh khi mở lại tray, refresh config, pin thêm hoặc unpin window khác. Chỉ window bị mất hoàn toàn khỏi các usable screen mới được đưa trở lại vùng nhìn thấy. Pinned geometry chỉ tồn tại trong phiên launcher hiện tại; filter, line count và stream vẫn dùng preference hiện có. Pinned logs dùng chung một background reader có pending request riêng theo `(app_id, stream)`, không tạo một worker thread cho mỗi window.
 
 Filter có thể viết `alpha,beta,!drop-me` hoặc `[alpha,beta,!drop-me]`. Dòng được giữ khi chứa ít nhất một positive term; term có tiền tố `!` loại dòng. Positive term được highlight trên nguyên văn log. Dấu phẩy bên trong term không được hỗ trợ.
 
