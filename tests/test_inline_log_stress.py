@@ -13,7 +13,7 @@ import yaml
 from PyQt6.QtCore import QCoreApplication, QEvent, QTimer
 from PyQt6.QtWidgets import QApplication, QStyle
 
-from lib.ui.inline_log_panel import InlineLogPanelCoordinator
+from lib.ui.inline_log_panel import InlineLogPanel
 from multi import AppControlWidget, SystemTrayApp
 
 
@@ -27,7 +27,17 @@ def _flush_deferred_deletes():
     gc.collect()
 
 
-class InlineLogLifecycleStressTests(unittest.TestCase):
+def _wait_until(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return bool(predicate())
+
+
+class IndependentLogLifecycleStressTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
@@ -35,10 +45,7 @@ class InlineLogLifecycleStressTests(unittest.TestCase):
         self.log_dir.mkdir()
         self.config_path = self.root / "setting.yaml"
         self.preference_path = self.root / "ui-log-preferences.json"
-        self.apps = (
-            ("stress-a", "Stress App A"),
-            ("stress-b", "Stress App B"),
-        )
+        self.apps = (("stress-a", "Stress App A"), ("stress-b", "Stress App B"))
         self.config_path.write_text(
             yaml.safe_dump(
                 {
@@ -80,30 +87,26 @@ class InlineLogLifecycleStressTests(unittest.TestCase):
             log_preferences_path=self.preference_path,
         )
         self.tray.auto_start_timer.stop()
+        self.tray.log_controller.refresh_timer.setInterval(10000)
 
     def tearDown(self):
         tray = getattr(self, "tray", None)
         if tray is not None:
             tray.auto_start_timer.stop()
-            for row in tuple(tray.menu.findChildren(AppControlWidget)):
+            tray.log_controller.shutdown()
+            for row in tuple(tray.row_widgets):
                 row.shutdown()
-            coordinator = getattr(tray, "log_coordinator", None)
-            if coordinator is not None:
-                coordinator.shutdown()
-            tray.menu.clear()
-            tray.menu.close()
-            tray.menu.deleteLater()
+            tray.log_popup.hide()
+            tray.log_popup.deleteLater()
+            tray.tray_panel.hide()
+            tray.tray_panel.deleteLater()
             tray.hide()
             tray.deleteLater()
         _flush_deferred_deletes()
         self.temp_dir.cleanup()
 
     def _row(self, app_id):
-        return next(
-            row
-            for row in self.tray.menu.findChildren(AppControlWidget)
-            if row.manager.app_id == app_id
-        )
+        return next(row for row in self.tray.row_widgets if row.manager.app_id == app_id)
 
     def test_fast_writer_survives_rebuild_switch_filter_and_shutdown(self):
         writer_errors = []
@@ -122,7 +125,9 @@ class InlineLogLifecycleStressTests(unittest.TestCase):
                     for index in range(2400):
                         marker = "drop" if index % 7 == 0 else "keep"
                         for handle in handles:
-                            handle.write(f"line-{index:04d} {marker} Unicode-日本語\n")
+                            handle.write(
+                                f"line-{index:04d} {marker} Unicode-日本語\n"
+                            )
                         if index % 20 == 0:
                             for handle in handles:
                                 handle.flush()
@@ -133,62 +138,63 @@ class InlineLogLifecycleStressTests(unittest.TestCase):
                 finally:
                     for handle in handles:
                         handle.close()
-            except BaseException as exc:  # surfaced in the test thread
+            except BaseException as exc:
                 writer_errors.append(exc)
 
         writer = threading.Thread(target=write_logs, daemon=True)
         writer.start()
         self.assertTrue(writer_started.wait(timeout=2.0))
 
+        controller = self.tray.log_controller
+        panel = self.tray.log_popup.panel
         for cycle in range(30):
-            self.tray.refresh_menu()
+            self.tray.rebuild_panel()
             row = self._row("stress-a" if cycle % 2 == 0 else "stress-b")
             stream = "stdout" if cycle % 3 else "stderr"
-            self.tray.log_coordinator.request_open(row, stream)
-            row.inline_log_panel.line_count.setValue(5000 if cycle % 2 else 100)
-            row.inline_log_panel.filter_edit.setText(
-                "[keep,!drop]" if cycle % 4 else ""
-            )
-            self.tray.log_coordinator.refresh_current()
+            panel.line_count.setValue(5000 if cycle % 2 else 100)
+            panel.filter_edit.setText("[keep,!drop]" if cycle % 4 else "")
+            controller.open_target(row.log_target, stream)
             QApplication.processEvents()
             _flush_deferred_deletes()
 
-            rows = self.tray.menu.findChildren(AppControlWidget)
-            coordinators = self.tray.menu.findChildren(InlineLogPanelCoordinator)
-            timers = self.tray.menu.findChildren(QTimer)
-            self.assertEqual(len(rows), 2)
-            self.assertEqual(len(coordinators), 1)
-            self.assertEqual(len(timers), 5)
-            self.assertTrue(all(item.timer.isActive() for item in rows))
-            self.assertTrue(self.tray.log_coordinator.refresh_timer.isActive())
+            self.assertEqual(len(self.tray.row_widgets), 2)
+            self.assertEqual(
+                len(self.tray.log_popup.findChildren(InlineLogPanel)), 1
+            )
+            self.assertEqual(len(controller.findChildren(QTimer)), 3)
+            self.assertTrue(all(item.timer.isActive() for item in self.tray.row_widgets))
+            self.assertTrue(controller.reader.is_alive())
 
         writer.join(timeout=5.0)
         self.assertFalse(writer.is_alive())
         self.assertEqual(writer_errors, [])
 
-        self.tray.refresh_menu()
+        self.tray.rebuild_panel()
         row = self._row("stress-a")
-        row.inline_log_panel.line_count.setValue(5000)
-        row.inline_log_panel.filter_edit.setText("")
-        self.tray.log_coordinator.request_open(row, "stdout")
-        self.tray.log_coordinator.refresh_current()
-        QApplication.processEvents()
+        panel.line_count.setValue(5000)
+        panel.filter_edit.setText("")
+        controller.open_target(row.log_target, "stdout")
+        self.assertTrue(
+            _wait_until(
+                lambda: "final-marker keep" in panel.log_view.toPlainText()
+            )
+        )
 
-        displayed = row.inline_log_panel.log_view.toPlainText()
-        self.assertIn("final-marker keep", displayed)
+        displayed = panel.log_view.toPlainText()
         self.assertLessEqual(len(displayed.splitlines()), 5000)
         self.assertNotIn("<html", displayed.lower())
 
-        coordinator = self.tray.log_coordinator
-        rows = tuple(self.tray.menu.findChildren(AppControlWidget))
+        rows = tuple(self.tray.row_widgets)
         for item in rows:
             item.shutdown()
-        coordinator.shutdown()
+        controller.shutdown()
         QApplication.processEvents()
 
-        self.assertFalse(coordinator.refresh_timer.isActive())
-        self.assertFalse(coordinator.hide_timer.isActive())
-        self.assertIsNone(coordinator.current_row)
+        self.assertFalse(controller.refresh_timer.isActive())
+        self.assertFalse(controller.hide_timer.isActive())
+        self.assertFalse(controller.open_timer.isActive())
+        self.assertIsNone(controller.current_target)
+        self.assertFalse(controller.reader.is_alive())
         self.assertTrue(all(not item.timer.isActive() for item in rows))
 
 

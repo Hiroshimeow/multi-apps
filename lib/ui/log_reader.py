@@ -1,4 +1,5 @@
 import os
+import threading
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -43,6 +44,26 @@ class LogReader(Protocol):
 class BoundedLogReader:
     def __init__(self, *, opener=open):
         self._opener = opener
+        self._cache_lock = threading.Lock()
+        self._cache_key = None
+        self._cache_snapshot = None
+
+    def _get_cached(self, key):
+        with self._cache_lock:
+            if key == self._cache_key:
+                return self._cache_snapshot
+        return None
+
+    def _store_cached(self, key, snapshot):
+        with self._cache_lock:
+            self._cache_key = key
+            self._cache_snapshot = snapshot
+        return snapshot
+
+    def _clear_cache(self):
+        with self._cache_lock:
+            self._cache_key = None
+            self._cache_snapshot = None
 
     @staticmethod
     def _validate_int(name, value, minimum, maximum):
@@ -74,8 +95,10 @@ class BoundedLogReader:
         try:
             handle = self._opener(canonical, "rb")
         except FileNotFoundError:
+            self._clear_cache()
             return LogSnapshot(path=canonical, state=LogSnapshotState.MISSING)
         except OSError as exc:
+            self._clear_cache()
             return LogSnapshot(
                 path=canonical,
                 state=LogSnapshotState.UNREADABLE,
@@ -93,12 +116,28 @@ class BoundedLogReader:
                     if stat.st_dev or stat.st_ino
                     else None
                 )
+                cache_key = (
+                    canonical,
+                    int(max_lines),
+                    int(max_bytes),
+                    int(stat.st_dev),
+                    int(stat.st_ino),
+                    size_bytes,
+                    int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))),
+                    int(getattr(stat, "st_ctime_ns", int(stat.st_ctime * 1_000_000_000))),
+                )
+                cached = self._get_cached(cache_key)
+                if cached is not None:
+                    return cached
                 if size_bytes == 0:
-                    return LogSnapshot(
-                        path=canonical,
-                        state=LogSnapshotState.EMPTY,
-                        size_bytes=0,
-                        file_identity=identity,
+                    return self._store_cached(
+                        cache_key,
+                        LogSnapshot(
+                            path=canonical,
+                            state=LogSnapshotState.EMPTY,
+                            size_bytes=0,
+                            file_identity=identity,
+                        ),
                     )
 
                 read_start = max(0, size_bytes - max_bytes)
@@ -111,6 +150,7 @@ class BoundedLogReader:
                 handle.seek(read_start)
                 raw = handle.read(read_length)
         except OSError as exc:
+            self._clear_cache()
             return LogSnapshot(
                 path=canonical,
                 state=LogSnapshotState.UNREADABLE,
@@ -133,13 +173,16 @@ class BoundedLogReader:
             lines = lines[-max_lines:]
             truncated = True
 
-        return LogSnapshot(
-            path=canonical,
-            state=LogSnapshotState.READY,
-            lines=tuple(lines),
-            size_bytes=size_bytes,
-            file_identity=identity,
-            truncated=truncated,
+        return self._store_cached(
+            cache_key,
+            LogSnapshot(
+                path=canonical,
+                state=LogSnapshotState.READY,
+                lines=tuple(lines),
+                size_bytes=size_bytes,
+                file_identity=identity,
+                truncated=truncated,
+            ),
         )
 
 

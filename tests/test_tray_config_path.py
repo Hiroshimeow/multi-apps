@@ -52,11 +52,13 @@ class LauncherConfigPathTests(unittest.TestCase):
     @staticmethod
     def _dispose_tray(tray: SystemTrayApp):
         tray.auto_start_timer.stop()
-        if hasattr(tray, "menu"):
-            for timer in tray.menu.findChildren(type(tray.auto_start_timer)):
-                timer.stop()
-            tray.menu.clear()
-            tray.menu.deleteLater()
+        tray.log_controller.shutdown()
+        for row in tuple(tray.row_widgets):
+            row.shutdown()
+        tray.log_popup.hide()
+        tray.log_popup.deleteLater()
+        tray.tray_panel.hide()
+        tray.tray_panel.deleteLater()
         tray.hide()
         tray.deleteLater()
         QApplication.processEvents()
@@ -150,7 +152,7 @@ class LauncherConfigPathTests(unittest.TestCase):
             finally:
                 self._dispose_tray(tray)
 
-    def test_injected_preference_path_restores_values_after_menu_rebuild(self):
+    def test_injected_preference_path_restores_values_after_panel_rebuild(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             supplied = self._write_config(root, "Before")
@@ -161,24 +163,25 @@ class LauncherConfigPathTests(unittest.TestCase):
                 launcher_argv=("multi.py", "--config", str(supplied)),
                 log_preferences_path=preference_path,
             )
+            tray.auto_start_timer.stop()
             try:
-                row = tray.menu.findChild(AppControlWidget)
-                tray.log_coordinator.request_open(row, "stdout")
-                row.inline_log_panel.line_count.setValue(5000)
-                row.inline_log_panel.filter_edit.setText("[alpha,!drop-me]")
-                tray.log_coordinator.request_open(row, "stderr")
+                row = tray.row_widgets[0]
+                panel = tray.log_popup.panel
+                tray.log_controller.open_target(row.log_target, "stdout")
+                panel.line_count.setValue(5000)
+                panel.filter_edit.setText("[alpha,!drop-me]")
+                tray.log_controller.open_target(row.log_target, "stderr")
                 QApplication.processEvents()
 
-                tray.refresh_menu()
+                tray.rebuild_panel()
+                restored = tray.row_widgets[0]
+                tray.log_controller.open_target(restored.log_target, "stderr")
                 QApplication.processEvents()
-                restored = tray.menu.findChild(AppControlWidget)
 
                 self.assertIsNot(restored, row)
-                self.assertEqual(restored.inline_log_panel.line_count.value(), 5000)
-                self.assertEqual(
-                    restored.inline_log_panel.filter_edit.text(), "[alpha,!drop-me]"
-                )
-                self.assertEqual(restored.inline_log_panel.stream_label.text(), "stderr")
+                self.assertEqual(panel.line_count.value(), 5000)
+                self.assertEqual(panel.filter_edit.text(), "[alpha,!drop-me]")
+                self.assertEqual(panel.stream_label.text(), "stderr")
                 self.assertEqual(
                     LogPanelPreferenceStore(preference_path).load("before"),
                     LogPanelPreference(5000, "[alpha,!drop-me]", "stderr"),
@@ -202,11 +205,16 @@ class LauncherConfigPathTests(unittest.TestCase):
                 launcher_argv=("multi.py", "--config", str(supplied)),
                 log_preferences_path=preference_path,
             )
+            tray.auto_start_timer.stop()
             try:
-                row = tray.menu.findChild(AppControlWidget)
-                self.assertEqual(row.inline_log_panel.line_count.value(), 100)
-                self.assertEqual(row.inline_log_panel.filter_edit.text(), "")
-                self.assertEqual(row.inline_log_panel.stream_label.text(), "stdout")
+                tray.log_controller.open_target(
+                    tray.row_widgets[0].log_target,
+                    "stdout",
+                )
+                panel = tray.log_popup.panel
+                self.assertEqual(panel.line_count.value(), 100)
+                self.assertEqual(panel.filter_edit.text(), "")
+                self.assertEqual(panel.stream_label.text(), "stdout")
                 self.assertEqual(supplied.read_bytes(), before)
             finally:
                 self._dispose_tray(tray)
@@ -261,19 +269,14 @@ class LauncherConfigPathTests(unittest.TestCase):
     def test_existing_constructor_call_remains_compatible(self):
         signature = inspect.signature(SystemTrayApp.__init__)
         self.assertEqual(signature.parameters["config_path"].default, "setting.yaml")
-        with patch.object(SystemTrayApp, "load_config") as load_config, patch.object(
-            SystemTrayApp, "refresh_menu"
-        ):
-            tray = SystemTrayApp(QIcon())
+        tray = SystemTrayApp(QIcon())
+        tray.auto_start_timer.stop()
         try:
             self.assertTrue(Path(tray.config_path).is_absolute())
             self.assertEqual(Path(tray.config_path).name, "setting.yaml")
-            load_config.assert_called_once_with()
+            self.assertFalse(hasattr(tray, "menu"))
         finally:
-            tray.auto_start_timer.stop()
-            tray.menu.deleteLater()
-            tray.deleteLater()
-            QApplication.processEvents()
+            self._dispose_tray(tray)
 
 
 if __name__ == "__main__":

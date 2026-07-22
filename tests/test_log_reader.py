@@ -212,6 +212,53 @@ class BoundedLogReaderTests(unittest.TestCase):
             self.assertEqual(unreadable.state, LogSnapshotState.UNREADABLE)
             self.assertEqual(unreadable.error, "PermissionError: denied")
 
+    def test_unchanged_signature_reuses_cached_snapshot_without_second_read(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = self._write(root, "cached.log", b"one\ntwo\nthree\n")
+            sizes = []
+
+            def opener(value, mode):
+                return _ReadRecorder(open(value, mode), sizes)
+
+            reader = BoundedLogReader(opener=opener)
+            first = reader.read(path, max_lines=2, max_bytes=1024)
+            self.assertTrue(sizes)
+            sizes.clear()
+
+            second = reader.read(path, max_lines=2, max_bytes=1024)
+
+            self.assertIs(second, first)
+            self.assertEqual(sizes, [])
+
+    def test_cache_invalidates_for_limits_append_and_same_size_rewrite(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = self._write(root, "invalidate.log", b"one\ntwo\n")
+            reader = BoundedLogReader()
+
+            one_line = reader.read(path, max_lines=1, max_bytes=1024)
+            two_lines = reader.read(path, max_lines=2, max_bytes=1024)
+            self.assertIsNot(two_lines, one_line)
+            self.assertEqual(two_lines.lines, ("one", "two"))
+
+            with path.open("ab") as handle:
+                handle.write(b"three\n")
+            appended = reader.read(path, max_lines=2, max_bytes=1024)
+            self.assertEqual(appended.lines, ("two", "three"))
+            self.assertIsNot(appended, two_lines)
+
+            previous_stat = path.stat()
+            path.write_bytes(b"four\nfive\nsix\n")
+            os.utime(
+                path,
+                ns=(
+                    previous_stat.st_atime_ns,
+                    previous_stat.st_mtime_ns + 1_000_000_000,
+                ),
+            )
+            rewritten = reader.read(path, max_lines=2, max_bytes=1024)
+            self.assertEqual(rewritten.lines, ("five", "six"))
+            self.assertIsNot(rewritten, appended)
+
     def _assert_late_io_snapshot(self, snapshot, path, error_type):
         stat = path.stat()
         expected_identity = (

@@ -13,29 +13,23 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
-    QMenu,
-    QWidget,
-    QWidgetAction,
     QLabel,
-    QPushButton,
-    QHBoxLayout,
     QVBoxLayout,
     QDialog,
     QDialogButtonBox,
     QLineEdit,
     QMessageBox,
-    QSizePolicy,
 )
-from PyQt6.QtGui import QIcon, QAction, QGuiApplication
-from PyQt6.QtCore import QEvent, QTimer, pyqtSignal, Qt, QPoint, QRect, QSize
+from PyQt6.QtGui import QCursor, QIcon, QGuiApplication
+from PyQt6.QtCore import QTimer, Qt, QRect
 
 # Import from modular library
 from lib.core import AppController
 from lib.runners.command_runner import CommandRunner
 from lib.runtime.single_instance import SingleInstanceLock
 from lib.ui.app_tools import AppToolService
+from lib.ui.app_row import AppControlWidget, AppNameLabel, HoverLogButton
 from lib.ui.log_preferences import (
-    LogPanelPreference,
     LogPanelPreferenceStore,
     default_log_preferences_path,
 )
@@ -45,13 +39,9 @@ from lib.ui.log_reader import (
     DEFAULT_TAIL_LINES,
     LogSnapshotState,
 )
-from lib.ui.inline_log_panel import (
-    InlineLogPanel,
-    InlineLogPanelCoordinator,
-    NativeScrollableMenuStyle,
-    PANEL_PREFERRED_HEIGHT,
-    compute_inline_menu_geometry,
-)
+from lib.ui.log_hover import LogHoverController
+from lib.ui.log_popup import LogPopupWindow
+from lib.ui.tray_panel import TrayPanelWindow
 from lib.utils import is_windows, is_linux
 
 
@@ -399,250 +389,6 @@ class AppManager:
 # ==========================================
 
 
-class AppNameLabel(QLabel):
-    """Clickable app label that opens the configured working directory."""
-
-    left_clicked = pyqtSignal()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.left_clicked.emit()
-        super().mousePressEvent(event)
-
-
-class HoverLogButton(QPushButton):
-    """A log button that reports pointer enter/leave without changing clicks."""
-
-    hover_entered = pyqtSignal()
-    hover_left = pyqtSignal()
-
-    def enterEvent(self, event):
-        self.hover_entered.emit()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self.hover_left.emit()
-        super().leaveEvent(event)
-
-
-class AppControlWidget(QWidget):
-    """Launcher row whose log panel is hosted at the top of the tray menu."""
-
-    def __init__(
-        self,
-        manager,
-        parent_menu,
-        result_notifier=None,
-        coordinator=None,
-        log_preference_store=None,
-        panel_parent=None,
-    ):
-        super().__init__()
-        self.manager = manager
-        self.parent_menu = parent_menu
-        self.result_notifier = result_notifier
-        self._shutdown = False
-        self.log_preference_store = log_preference_store
-        self.log_coordinator = coordinator or InlineLogPanelCoordinator(parent_menu)
-        self._owns_log_coordinator = coordinator is None
-
-        root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
-
-        self.top_row = QWidget(self)
-        layout = QHBoxLayout(self.top_row)
-        layout.setContentsMargins(10, 5, 10, 5)
-        layout.setSpacing(10)
-
-        self.name_container = QWidget(self.top_row)
-        self.name_container.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Preferred,
-        )
-        name_layout = QVBoxLayout(self.name_container)
-        name_layout.setContentsMargins(0, 0, 0, 0)
-        name_layout.setSpacing(1)
-
-        self.lbl_name = AppNameLabel(manager.name)
-        self.lbl_name.setTextFormat(Qt.TextFormat.PlainText)
-        name_font = self.lbl_name.font()
-        name_font.setBold(True)
-        self.lbl_name.setFont(name_font)
-        self.lbl_name.left_clicked.connect(self.on_name_clicked)
-        self.lbl_name.setToolTip(
-            f"{manager.name}\nLeft-click to open the application working directory."
-        )
-        self.lbl_name.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Preferred,
-        )
-        self.lbl_name.setMinimumWidth(96)
-        self.name_container.setMinimumWidth(96)
-
-        self.lbl_pid = QLabel("PID: -")
-        pid_font = self.lbl_pid.font()
-        if pid_font.pointSize() > 0:
-            pid_font.setPointSize(max(7, pid_font.pointSize() - 2))
-        self.lbl_pid.setFont(pid_font)
-        self.lbl_pid.setStyleSheet("color: #808080;")
-        name_layout.addWidget(self.lbl_name)
-        name_layout.addWidget(self.lbl_pid)
-
-        self.lbl_status = QLabel()
-        timestamp_width = self.lbl_status.fontMetrics().horizontalAdvance(
-            "2000-00-00 00:00:00"
-        )
-        self.lbl_status.setMinimumWidth(timestamp_width + 8)
-
-        self.btn_start = QPushButton("Start")
-        self.btn_start.setToolTip(f"Start {manager.name}")
-        self.btn_start.clicked.connect(self.on_start)
-
-        self.btn_stop = QPushButton("Stop")
-        self.btn_stop.setToolTip(f"Stop {manager.name}")
-        self.btn_stop.clicked.connect(self.on_stop)
-
-        self.btn_ologs = HoverLogButton("O.Logs")
-        self.btn_ologs.setToolTip("Open output log; hover to show inline live log")
-        self.btn_ologs.clicked.connect(self.manager.view_output_log)
-
-        self.btn_elogs = HoverLogButton("E.Logs")
-        self.btn_elogs.setToolTip("Open error log; hover to show inline live log")
-        self.btn_elogs.clicked.connect(self.manager.view_error_log)
-
-        for button in (
-            self.btn_start,
-            self.btn_stop,
-            self.btn_ologs,
-            self.btn_elogs,
-        ):
-            self._fit_button_to_caption(button)
-
-        layout.addWidget(self.name_container)
-        layout.addWidget(self.lbl_status)
-        layout.addWidget(self.btn_start)
-        layout.addWidget(self.btn_stop)
-        layout.addWidget(self.btn_ologs)
-        layout.addWidget(self.btn_elogs)
-        layout.setStretch(0, 1)
-
-        panel_parent = panel_parent or self
-        self.inline_log_panel = InlineLogPanel(panel_parent)
-        preference = (
-            self.log_preference_store.load(self.manager.app_id)
-            if self.log_preference_store is not None
-            else LogPanelPreference()
-        )
-        self.inline_log_panel._suppress_control_signals = True
-        try:
-            self.inline_log_panel.line_count.setValue(preference.line_count)
-            self.inline_log_panel.filter_edit.setText(preference.filter_expression)
-            self.inline_log_panel.set_stream(preference.stream)
-        finally:
-            self.inline_log_panel._suppress_control_signals = False
-        root_layout.addWidget(self.top_row)
-        if panel_parent is self:
-            root_layout.addWidget(self.inline_log_panel)
-        else:
-            panel_parent.layout().addWidget(self.inline_log_panel)
-        self.log_coordinator.register_row(self)
-        self.btn_ologs.hover_entered.connect(self._stdout_entered)
-        self.btn_ologs.hover_left.connect(self._stdout_left)
-        self.btn_elogs.hover_entered.connect(self._stderr_entered)
-        self.btn_elogs.hover_left.connect(self._stderr_left)
-
-        root_layout.activate()
-        self.setMinimumWidth(max(self.top_row.sizeHint().width(), 520))
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_ui)
-        self.timer.start(1000)
-        self.update_ui()
-
-    def _stdout_entered(self):
-        self.log_coordinator.button_entered(self, "stdout")
-
-    def _stdout_left(self):
-        self.log_coordinator.button_left(self, "stdout")
-
-    def _stderr_entered(self):
-        self.log_coordinator.button_entered(self, "stderr")
-
-    def _stderr_left(self):
-        self.log_coordinator.button_left(self, "stderr")
-
-    def persist_log_preferences(self):
-        if self._shutdown or self.log_preference_store is None:
-            return False
-        return self.log_preference_store.save(
-            self.manager.app_id,
-            LogPanelPreference(
-                line_count=self.inline_log_panel.line_count.value(),
-                filter_expression=self.inline_log_panel.filter_edit.text(),
-                stream=self.inline_log_panel.stream_label.text(),
-            ),
-        )
-
-    def shutdown(self):
-        if self._shutdown:
-            return
-        self._shutdown = True
-        self.timer.stop()
-        for signal, callback in (
-            (self.btn_ologs.hover_entered, self._stdout_entered),
-            (self.btn_ologs.hover_left, self._stdout_left),
-            (self.btn_elogs.hover_entered, self._stderr_entered),
-            (self.btn_elogs.hover_left, self._stderr_left),
-        ):
-            try:
-                signal.disconnect(callback)
-            except (TypeError, RuntimeError):
-                pass
-        if self._owns_log_coordinator:
-            self.log_coordinator.shutdown()
-
-    @staticmethod
-    def _fit_button_to_caption(button):
-        text_width = button.fontMetrics().horizontalAdvance(button.text()) + 24
-        button.setMinimumWidth(max(button.sizeHint().width(), text_width))
-
-    def update_ui(self):
-        status_info = self.manager.get_status_info()
-        status = status_info.get("status", "STOPPED")
-        presentation = self.manager.get_status_presentation(status_info)
-        self.lbl_status.setText(presentation["text"])
-        self.lbl_status.setStyleSheet(f"color: {presentation['color']};")
-        self.lbl_status.setToolTip(presentation["tooltip"])
-
-        pid_presentation = self.manager.get_pid_presentation(status_info)
-        self.lbl_pid.setText(pid_presentation["text"])
-        self.lbl_pid.setToolTip(pid_presentation["tooltip"])
-
-        multi_run = self.manager.app_config.get("multi_run", False)
-        controllable = status in {"STARTING", "RUNNING", "STOPPING"}
-        self.btn_stop.setEnabled(controllable)
-        self.btn_start.setEnabled(status == "STOPPED" or multi_run)
-
-    def on_start(self):
-        success, msg = self.manager.launch(manual=True, parent=self)
-        # Update immediately
-        self.update_ui()
-        # Do not close menu
-
-    def on_stop(self):
-        self.manager.stop_all()
-        self.update_ui()
-
-    def _notify_result(self, result):
-        if not result.ok and self.result_notifier is not None:
-            self.result_notifier(self.manager.name, result)
-
-    def on_name_clicked(self):
-        """Open the configured working directory through the app-tool service."""
-        self._notify_result(self.manager.open_workdir())
-
-
 class SystemTrayApp(QSystemTrayIcon):
     def __init__(
         self,
@@ -671,22 +417,31 @@ class SystemTrayApp(QSystemTrayIcon):
             )
         self.launcher_argv = tuple(launcher_argv)
         self.managers = []
+        self.row_widgets = []
         self.controller = None
         self.tool_service = AppToolService()
         self.startup_auto_start_suppressed_ids = set()
         self.instance_lock = instance_lock
         self._restart_requested = False
+        self._ui_shutdown = False
         self.load_config()
 
-        # Setup Menu
-        self.menu = QMenu()
-        self.refresh_menu()
-        self.setContextMenu(self.menu)
+        self.tray_panel = TrayPanelWindow()
+        self.log_popup = LogPopupWindow()
+        self.log_controller = LogHoverController(
+            self.log_popup,
+            self.log_preference_store,
+            placement_provider=self._log_popup_placement,
+            parent=self,
+        )
+        self.tray_panel.hidden.connect(self.log_controller.hide_popup)
+        self.rebuild_panel()
 
-        # Click handler (Left click -> Toast)
         self.activated.connect(self.on_tray_activated)
+        application = QApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self.shutdown_ui)
 
-        # Auto-start only after controller/session reconciliation and menu recovery.
         self.auto_start_timer = QTimer(self)
         self.auto_start_timer.setSingleShot(True)
         self.auto_start_timer.timeout.connect(self.auto_start_apps)
@@ -712,23 +467,17 @@ class SystemTrayApp(QSystemTrayIcon):
                 suppressed_ids.clear()
 
     def load_config(self):
-        # Initialize AppController with the selected launcher config.
         self.controller = AppController(self.config_path)
         tool_service = getattr(self, "tool_service", None)
         if tool_service is None:
             tool_service = AppToolService()
             self.tool_service = tool_service
 
-        # Get all apps
         apps = self.controller.list_apps()
-
         for app in apps:
-            # Check enabled
             if not app.get("enabled", True):
                 continue
 
-            # OS Filter
-            # Keep OS filtering logic as requested
             allowed_os = app.get("os")
             if allowed_os:
                 if isinstance(allowed_os, str):
@@ -737,273 +486,127 @@ class SystemTrayApp(QSystemTrayIcon):
 
                 is_visible = False
                 if is_windows():
-                    if any(
-                        x in ["win", "windows", "win10", "win11"] for x in allowed_os
-                    ):
-                        is_visible = True
+                    is_visible = any(
+                        x in ["win", "windows", "win10", "win11"]
+                        for x in allowed_os
+                    )
                 elif is_linux():
-                    if any(x in ["linux", "ubuntu", "debian"] for x in allowed_os):
-                        is_visible = True
-
+                    is_visible = any(
+                        x in ["linux", "ubuntu", "debian"] for x in allowed_os
+                    )
                 if not is_visible:
                     continue
 
-            # Create Manager wrapper
-            mgr = AppManager(
-                self.controller,
-                app["name"],
-                self.startup_auto_start_suppressed_ids,
-                tool_service,
+            self.managers.append(
+                AppManager(
+                    self.controller,
+                    app["name"],
+                    self.startup_auto_start_suppressed_ids,
+                    tool_service,
+                )
             )
-            self.managers.append(mgr)
 
-    def refresh_menu(self):
-        for row in tuple(self.menu.findChildren(AppControlWidget)):
+    def rebuild_panel(self):
+        self.log_controller.hide_popup()
+        for row in tuple(self.row_widgets):
             row.shutdown()
-        old_coordinator = getattr(self, "log_coordinator", None)
-        if old_coordinator is not None:
-            old_coordinator.shutdown()
-            old_coordinator.deleteLater()
-        self._menu_generation = getattr(self, "_menu_generation", 0) + 1
-
-        if not hasattr(self.menu, "_native_scroll_style"):
-            self.menu._native_scroll_style = NativeScrollableMenuStyle()
-            self.menu._native_scroll_style.setParent(self.menu)
-            self.menu.setStyle(self.menu._native_scroll_style)
-
-        self.menu.clear()
-        self.menu.setMinimumWidth(0)
-        self.menu.setMaximumWidth(16777215)
-        self.menu.setMaximumHeight(16777215)
-        self._inline_menu_base_geometry = QRect()
-        self.log_coordinator = InlineLogPanelCoordinator(
-            self.menu,
-            generation=self._menu_generation,
-        )
-        self.menu.aboutToHide.connect(self.log_coordinator.close_for_menu_hide)
-        row_minimum_width = 0
-
-        # Header and one fixed log area above every app row.
-        header = QAction("Launcher Control Center", self.menu)
-        header.setEnabled(False)
-        self.menu.addAction(header)
-        self.menu.addSeparator()
-
-        self.log_panel_host = QWidget(self.menu)
-        self.log_panel_host.hide()
-        log_panel_layout = QVBoxLayout(self.log_panel_host)
-        log_panel_layout.setContentsMargins(0, 0, 0, 0)
-        log_panel_layout.setSpacing(0)
-        self.log_panel_action = QWidgetAction(self.menu)
-        self.log_panel_action.setDefaultWidget(self.log_panel_host)
-        self.log_panel_action.setVisible(False)
-        self.menu.addAction(self.log_panel_action)
-        self.log_coordinator.panel_visibility_changed.connect(
-            lambda visible, current=self: SystemTrayApp._set_top_log_panel_visible(
-                current, visible
+            row.deleteLater()
+        self.row_widgets = [
+            AppControlWidget(
+                manager,
+                parent=self.tray_panel.rows_container,
+                result_notifier=self.notify_app_tool_failure,
+                log_controller=self.log_controller,
             )
-        )
-
-        # List Apps (Use QWidgetAction to embed custom widget)
-        if not self.managers:
-            empty_action = QAction("No apps configured", self.menu)
-            empty_action.setEnabled(False)
-            self.menu.addAction(empty_action)
+            for manager in self.managers
+        ]
+        if self.row_widgets:
+            rows = self.row_widgets
         else:
-            for mgr in self.managers:
-                action = QWidgetAction(self.menu)
-                widget = AppControlWidget(
-                    mgr,
-                    self.menu,
-                    getattr(self, "notify_app_tool_failure", None),
-                    self.log_coordinator,
-                    getattr(self, "log_preference_store", None),
-                    self.log_panel_host,
-                )
-                action.setDefaultWidget(widget)
-                self.menu.addAction(action)
-                row_minimum_width = max(
-                    row_minimum_width,
-                    widget.minimumWidth(),
-                    widget.sizeHint().width(),
-                )
+            empty = QLabel("No apps configured", self.tray_panel.rows_container)
+            empty.setContentsMargins(10, 8, 10, 8)
+            rows = [empty]
+        self.tray_panel.set_rows(rows)
 
-        self.menu.addSeparator()
-
-        # Global Actions
-        open_config_action = QAction("Open Config", self.menu)
-        config_path = getattr(self, "config_path", None)
-        tool_service = getattr(self, "tool_service", None)
-        config_status = (
-            tool_service.file_status(config_path)
-            if tool_service is not None
-            else None
+        self.tray_panel.clear_actions()
+        config_status = self.tool_service.file_status(self.config_path)
+        self.open_config_action = self.tray_panel.add_action(
+            "Open Config",
+            self.open_config,
+            enabled=config_status.ok,
+            tooltip=config_status.message,
         )
-        open_config_action.setEnabled(bool(config_status and config_status.ok))
-        open_config_action.setToolTip(
-            config_status.message if config_status is not None else "Config file unavailable."
+        self.stop_all_action = self.tray_panel.add_action(
+            "Stop All Apps",
+            self.stop_all_apps,
         )
-        if config_status is not None and config_status.ok:
-            open_config_action.triggered.connect(
-                lambda _checked=False, current=self: SystemTrayApp.open_config(current)
-            )
-        self.menu.addAction(open_config_action)
-
-        stop_all_action = QAction("Stop All Apps", self.menu)
-        stop_all_action.triggered.connect(self.stop_all_apps)
-        self.menu.addAction(stop_all_action)
-
-        self.restart_action = QAction("Restart Launcher", self.menu)
-        self.restart_action.triggered.connect(self.restart_app)
-        self.menu.addAction(self.restart_action)
-
-        exit_action = QAction("Exit Launcher", self.menu)
-        exit_action.triggered.connect(self.exit_app)
-        self.menu.addAction(exit_action)
-
-        if row_minimum_width:
-            self.menu.setMinimumWidth(
-                max(self.menu.minimumSizeHint().width(), row_minimum_width + 8)
-            )
-
-    def _set_top_log_panel_visible(self, visible):
-        action = getattr(self, "log_panel_action", None)
-        if action is not None:
-            menu = self.menu
-            base_geometry = getattr(self, "_inline_menu_base_geometry", QRect())
-            if visible and menu.isVisible() and base_geometry.isNull():
-                self._inline_menu_base_geometry = QRect(menu.frameGeometry())
-            host = getattr(self, "log_panel_host", None)
-            if host is not None:
-                host.setVisible(bool(visible))
-                host.updateGeometry()
-            action.setVisible(bool(visible))
-            action.changed.emit()
-        SystemTrayApp._resize_menu_for_inline_panel(self)
-
-    def _resize_menu_for_inline_panel(self):
-        if getattr(self, "_inline_menu_resize_in_progress", False):
-            return
-        self._inline_menu_resize_in_progress = True
-        try:
-            SystemTrayApp._resize_menu_for_inline_panel_once(self)
-        finally:
-            self._inline_menu_resize_in_progress = False
-
-    def _resize_menu_for_inline_panel_once(self):
-        menu = self.menu
-        menu.ensurePolished()
-        visible_anchor = menu.frameGeometry() if menu.isVisible() else QRect()
-
-        def invalidate_widget_actions():
-            actions = menu.actions()
-            current_action = getattr(self, "log_panel_action", None)
-            if current_action in actions:
-                index = actions.index(current_action)
-                before = actions[index + 1] if index + 1 < len(actions) else None
-                menu.removeAction(current_action)
-                menu.insertAction(before, current_action)
-
-            widget_actions = [
-                action
-                for action in menu.actions()
-                if isinstance(action, QWidgetAction)
-                and action.defaultWidget() is not None
-            ]
-            for action in widget_actions:
-                action.defaultWidget().updateGeometry()
-            QApplication.sendEvent(menu, QEvent(QEvent.Type.LayoutRequest))
-            for action in widget_actions:
-                action.changed.emit()
-            menu_layout = menu.layout()
-            if menu_layout is not None:
-                menu_layout.activate()
-
-        invalidate_widget_actions()
-        menu.adjustSize()
-        screen_anchor = (
-            visible_anchor.center()
-            if not visible_anchor.isNull()
-            else menu.frameGeometry().center()
+        self.restart_action = self.tray_panel.add_action(
+            "Restart Launcher",
+            self.restart_app,
         )
-        screen = QGuiApplication.screenAt(screen_anchor)
-        if screen is None and hasattr(menu, "screen"):
-            screen = menu.screen()
+        self.exit_action = self.tray_panel.add_action(
+            "Exit Launcher",
+            self.exit_app,
+        )
+
+    def _tray_anchor_and_screen(self):
+        anchor = self.geometry()
+        if anchor.isNull() or not anchor.isValid():
+            cursor = QCursor.pos()
+            anchor = QRect(cursor.x(), cursor.y(), 1, 1)
+        screen = QGuiApplication.screenAt(anchor.center()) or QGuiApplication.primaryScreen()
         if screen is None:
-            screen = QGuiApplication.primaryScreen()
-        if screen is None:
-            return
+            return anchor, QRect(anchor.x(), anchor.y(), 1, 1)
+        return anchor, screen.availableGeometry()
 
-        panel = None
-        coordinator = getattr(self, "log_coordinator", None)
-        if coordinator is not None and coordinator.current_row is not None:
-            panel = coordinator.current_row.inline_log_panel
-        panel_is_open = panel is not None and panel.isVisible()
-        base_geometry = getattr(self, "_inline_menu_base_geometry", QRect())
-        if panel_is_open and base_geometry.isNull() and not visible_anchor.isNull():
-            base_geometry = QRect(visible_anchor)
-            self._inline_menu_base_geometry = QRect(base_geometry)
-        elif not panel_is_open and not base_geometry.isNull():
-            menu.setMaximumWidth(16777215)
-            menu.setMaximumHeight(16777215)
-            invalidate_widget_actions()
-            menu.adjustSize()
-            if menu.isVisible():
-                menu.setGeometry(base_geometry)
-            self._inline_menu_base_geometry = QRect()
-            return
+    def _log_popup_placement(self):
+        tray_rect = self.tray_panel.frameGeometry()
+        screen = (
+            QGuiApplication.screenAt(tray_rect.center())
+            or QGuiApplication.primaryScreen()
+        )
+        available = screen.availableGeometry() if screen is not None else tray_rect
+        return tray_rect, available
 
-        panel_height = panel.height() if panel_is_open else 0
-        natural = menu.sizeHint()
-        base_height = max(1, natural.height() - panel_height)
-        anchor = (
-            base_geometry
-            if not base_geometry.isNull()
-            else visible_anchor if not visible_anchor.isNull() else menu.frameGeometry()
+    def show_panel(self):
+        anchor, available = self._tray_anchor_and_screen()
+        for row in self.row_widgets:
+            row.update_ui()
+        self.tray_panel.show_at(
+            anchor,
+            available,
+            reserved_top_height=self.log_popup.reserved_height,
         )
-        if anchor.isNull():
-            anchor = QRect(screen.availableGeometry().bottomRight(), QSize(1, 1))
-        geometry = compute_inline_menu_geometry(
-            base_menu_size=QSize(natural.width(), base_height),
-            content_width=max(menu.minimumWidth(), natural.width()),
-            desired_panel_height=PANEL_PREFERRED_HEIGHT if panel_is_open else 0,
-            available_geometry=screen.availableGeometry(),
-            anchor_rect=anchor,
-            preserve_origin=False,
-        )
-        if panel_is_open:
-            panel.setPreferredHeight(geometry.panel_height)
-        menu.setMaximumWidth(geometry.width_cap)
-        menu.setMaximumHeight(geometry.height_cap)
-        invalidate_widget_actions()
-        menu.adjustSize()
-        if menu.isVisible():
-            menu.setGeometry(geometry.menu_rect)
-        self._last_inline_menu_geometry = geometry
+
+    def toggle_panel(self):
+        if self.tray_panel.isVisible():
+            self.tray_panel.hide()
+        else:
+            self.show_panel()
 
     def refresh_all(self):
-        """Reload config and refresh menu."""
-        menu = getattr(self, "menu", None)
-        if menu is not None:
-            menu.close()
+        was_visible = self.tray_panel.isVisible()
+        self.tray_panel.hide()
         self.managers = []
         self.load_config()
-        self.refresh_menu()
+        self.rebuild_panel()
+        if was_visible:
+            self.show_panel()
 
     def on_tray_activated(self, reason):
-        # Trigger left click
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+        if reason == QSystemTrayIcon.ActivationReason.Context:
+            self.toggle_panel()
+        elif reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.show_toast()
 
     def show_toast(self):
-        # Build message from recovered registry status, not launcher-local memory.
         active_apps = []
         for mgr in self.managers:
             status_info = mgr.get_status_info()
             status = status_info.get("status", "STOPPED")
             if status != "STOPPED":
                 active_apps.append(
-                    f"• {mgr.name}: {mgr.get_status_text(status_info)}"
+                    f"? {mgr.name}: {mgr.get_status_text(status_info)}"
                 )
 
         if active_apps:
@@ -1012,7 +615,6 @@ class SystemTrayApp(QSystemTrayIcon):
         else:
             title = "Launcher Idle"
             msg = "No applications are currently running."
-
         self.showMessage(title, msg, QSystemTrayIcon.MessageIcon.Information, 3000)
 
     def open_config(self):
@@ -1041,16 +643,22 @@ class SystemTrayApp(QSystemTrayIcon):
         )
 
     def _capture_launcher_ui_activity(self):
-        snapshot = {"auto_start": None, "menu_timers": []}
+        snapshot = {"auto_start": None, "ui_timers": []}
         if hasattr(self, "auto_start_timer"):
             timer = self.auto_start_timer
             active = timer.isActive()
             remaining_ms = timer.remainingTime() if active else -1
             snapshot["auto_start"] = (timer, active, remaining_ms)
-        if hasattr(self, "menu"):
-            snapshot["menu_timers"] = [
-                (timer, timer.isActive()) for timer in self.menu.findChildren(QTimer)
-            ]
+
+        timers = []
+        if hasattr(self, "tray_panel"):
+            timers.extend(self.tray_panel.findChildren(QTimer))
+        if hasattr(self, "log_controller"):
+            timers.extend(self.log_controller.findChildren(QTimer))
+        unique = {id(timer): timer for timer in timers}
+        snapshot["ui_timers"] = [
+            (timer, timer.isActive()) for timer in unique.values()
+        ]
         return snapshot
 
     def _stop_launcher_ui_activity(self):
@@ -1058,7 +666,7 @@ class SystemTrayApp(QSystemTrayIcon):
         auto_start = snapshot["auto_start"]
         if auto_start is not None:
             auto_start[0].stop()
-        for timer, _was_active in snapshot["menu_timers"]:
+        for timer, _was_active in snapshot["ui_timers"]:
             timer.stop()
         return snapshot
 
@@ -1069,9 +677,31 @@ class SystemTrayApp(QSystemTrayIcon):
             timer, was_active, remaining_ms = auto_start
             if was_active:
                 timer.start(max(1, remaining_ms))
-        for timer, was_active in snapshot.get("menu_timers", []):
+        for timer, was_active in snapshot.get("ui_timers", []):
             if was_active:
                 timer.start()
+
+    def shutdown_ui(self):
+        if getattr(self, "_ui_shutdown", False):
+            return
+        self._ui_shutdown = True
+        auto_start = getattr(self, "auto_start_timer", None)
+        if auto_start is not None:
+            auto_start.stop()
+        for row in tuple(getattr(self, "row_widgets", ())):
+            row.shutdown()
+        controller = getattr(self, "log_controller", None)
+        if controller is not None:
+            controller.shutdown()
+        popup = getattr(self, "log_popup", None)
+        if popup is not None:
+            popup.hide()
+        panel = getattr(self, "tray_panel", None)
+        if panel is not None:
+            panel.hide()
+
+    def _shutdown_log_controller(self):
+        self.shutdown_ui()
 
     def _spawn_replacement_launcher(self):
         project_root = os.path.dirname(os.path.abspath(__file__))
@@ -1123,10 +753,12 @@ class SystemTrayApp(QSystemTrayIcon):
             )
             return
 
+        SystemTrayApp.shutdown_ui(self)
         QApplication.quit()
 
     def exit_app(self):
         self._stop_launcher_ui_activity()
+        SystemTrayApp.shutdown_ui(self)
         QApplication.quit()
 
 

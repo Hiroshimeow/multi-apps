@@ -48,8 +48,11 @@ class LogFilterExecutionTests(unittest.TestCase):
         result = apply_log_filter(["alpha here", "unrelated", "DROP this"], spec)
         self.assertEqual(result.state, LogFilterResultState.READY)
         self.assertEqual(result.source_line_count, 3)
-        self.assertEqual(result.excluded_line_count, 1)
-        self.assertEqual([(line.source_index, line.text) for line in result.lines], [(0, "alpha here"), (1, "unrelated")])
+        self.assertEqual(result.excluded_line_count, 2)
+        self.assertEqual(
+            [(line.source_index, line.text) for line in result.lines],
+            [(0, "alpha here")],
+        )
         conflict = apply_log_filter(["alpha"], parse_filter_expression("alpha,!alpha"))
         self.assertEqual(conflict.state, LogFilterResultState.FULLY_FILTERED)
         self.assertEqual(conflict.lines, ())

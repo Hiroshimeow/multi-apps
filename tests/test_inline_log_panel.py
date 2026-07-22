@@ -5,23 +5,18 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
 from unittest.mock import MagicMock
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QFrame, QMenu, QStyle
+from PyQt6.QtWidgets import QApplication, QFrame
 
 from lib.ui.inline_log_panel import (
-    DEFAULT_HIDE_DELAY_MS,
-    DEFAULT_REFRESH_INTERVAL_MS,
-    HIDE_DELAY_MS,
+    FILTER_SOFT_MIN_WIDTH,
     InlineLogPanel,
-    InlineLogPanelCoordinator,
     LogRangeHighlighter,
-    NativeScrollableMenuStyle,
     PANEL_EMERGENCY_MIN_HEIGHT,
+    PANEL_MAX_HEIGHT,
     PANEL_PREFERRED_HEIGHT,
-    REFRESH_INTERVAL_MS,
-    compute_inline_menu_geometry,
 )
 from lib.ui.log_reader import DEFAULT_MAX_BYTES, LogSnapshot, LogSnapshotState
 
@@ -70,10 +65,6 @@ class InlineLogPanelWidgetTests(unittest.TestCase):
         self.assertEqual(self.panel.filter_label.buddy(), self.panel.filter_edit)
         self.assertEqual(self.panel.lines_label.buddy(), self.panel.line_count)
         self.assertIn("!term excludes", self.panel.filter_edit.toolTip())
-        self.assertEqual(REFRESH_INTERVAL_MS, 500)
-        self.assertEqual(HIDE_DELAY_MS, 300)
-        self.assertEqual(DEFAULT_REFRESH_INTERVAL_MS, 500)
-        self.assertEqual(DEFAULT_HIDE_DELAY_MS, 300)
 
     def test_ready_filter_highlights_and_copy_plain_text(self):
         self.panel.show()
@@ -364,282 +355,8 @@ class InlineLogPanelWidgetTests(unittest.TestCase):
                 self.assertTrue(control.hasFocus())
 
 
-class InlineLogPanelCoordinatorTests(unittest.TestCase):
-    def make_row(self, name, snapshots):
-        manager = MagicMock()
-        manager.name = name
-        manager.get_log_snapshot.side_effect = list(snapshots)
-        row = MagicMock()
-        row.manager = manager
-        row.persist_log_preferences = MagicMock()
-        row.inline_log_panel = InlineLogPanel()
-        row.inline_log_panel.setParent(None)
-        return row
-
-    def tearDown(self):
-        for widget in QApplication.topLevelWidgets():
-            if isinstance(widget, InlineLogPanel):
-                widget.close()
-                widget.deleteLater()
-        QApplication.processEvents()
-
-    def test_open_switch_one_panel_and_one_refresh_timer(self):
-        first = self.make_row("one", [ready_snapshot("out"), ready_snapshot("err")])
-        second = self.make_row("two", [ready_snapshot("two")])
-        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=20, hide_delay_ms=15)
-
-        coordinator.request_open(first, "stdout")
-        self.assertIs(coordinator.current_row, first)
-        self.assertTrue(first.inline_log_panel.isVisible())
-        self.assertTrue(coordinator.refresh_timer.isActive())
-        self.assertEqual(first.inline_log_panel.stream_label.text(), "stdout")
-
-        coordinator.request_open(first, "stderr")
-        self.assertEqual(first.inline_log_panel.stream_label.text(), "stderr")
-        self.assertEqual(first.manager.get_log_snapshot.call_count, 2)
-
-        coordinator.request_open(second, "stdout")
-        self.assertFalse(first.inline_log_panel.isVisible())
-        self.assertTrue(second.inline_log_panel.isVisible())
-        self.assertIs(coordinator.current_row, second)
-        self.assertTrue(coordinator.refresh_timer.isActive())
-        coordinator.shutdown()
-        self.assertFalse(coordinator.refresh_timer.isActive())
-        self.assertFalse(coordinator.hide_timer.isActive())
-        self.assertFalse(second.inline_log_panel.isVisible())
-
-    def test_same_stream_reentry_does_not_reemit_visibility_or_reread_log(self):
-        row = self.make_row(
-            "one",
-            [ready_snapshot("first"), ready_snapshot("unexpected second read")],
-        )
-        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=1000, hide_delay_ms=30)
-        visibility_changed = MagicMock()
-        coordinator.panel_visibility_changed.connect(visibility_changed)
-
-        coordinator.request_open(row, "stdout")
-        visibility_changed.reset_mock()
-        initial_reads = row.manager.get_log_snapshot.call_count
-
-        coordinator.request_open(row, "stdout")
-
-        visibility_changed.assert_not_called()
-        self.assertEqual(row.manager.get_log_snapshot.call_count, initial_reads)
-        self.assertIs(coordinator.current_row, row)
-        self.assertEqual(coordinator.current_stream, "stdout")
-        self.assertTrue(coordinator.refresh_timer.isActive())
-        coordinator.shutdown()
-
-    def test_switching_rows_and_streams_does_not_reemit_visibility(self):
-        first = self.make_row(
-            "one",
-            [ready_snapshot("one-out"), ready_snapshot("one-err")],
-        )
-        second = self.make_row(
-            "two",
-            [ready_snapshot("two-out"), ready_snapshot("two-err")],
-        )
-        coordinator = InlineLogPanelCoordinator(
-            refresh_interval_ms=1000,
-            hide_delay_ms=30,
-        )
-        visibility_changed = MagicMock()
-        coordinator.panel_visibility_changed.connect(visibility_changed)
-
-        coordinator.request_open(first, "stdout")
-        coordinator.request_open(second, "stdout")
-        coordinator.request_open(second, "stderr")
-        coordinator.request_open(first, "stderr")
-
-        self.assertEqual(
-            [call.args for call in visibility_changed.call_args_list],
-            [(True,)],
-        )
-        self.assertIs(coordinator.current_row, first)
-        self.assertEqual(coordinator.current_stream, "stderr")
-        coordinator.shutdown()
-
-    def test_hover_debounces_to_latest_log_target(self):
-        first = self.make_row("one", [ready_snapshot("first")])
-        second = self.make_row("two", [ready_snapshot("second")])
-        coordinator = InlineLogPanelCoordinator(
-            refresh_interval_ms=1000,
-            hide_delay_ms=30,
-            open_delay_ms=20,
-        )
-
-        coordinator.button_entered(first, "stdout")
-        self.assertIsNone(coordinator.current_row)
-        first.manager.get_log_snapshot.assert_not_called()
-        coordinator.button_left(first, "stdout")
-        coordinator.button_entered(second, "stderr")
-
-        QTest.qWait(35)
-        QApplication.processEvents()
-
-        first.manager.get_log_snapshot.assert_not_called()
-        second.manager.get_log_snapshot.assert_called_once_with(
-            "err",
-            max_lines=100,
-            max_bytes=DEFAULT_MAX_BYTES,
-        )
-        self.assertIs(coordinator.current_row, second)
-        self.assertEqual(coordinator.current_stream, "stderr")
-        coordinator.shutdown()
-
-    def test_hover_leave_before_open_delay_cancels_pending_open(self):
-        row = self.make_row("one", [ready_snapshot("unexpected")])
-        coordinator = InlineLogPanelCoordinator(
-            refresh_interval_ms=1000,
-            hide_delay_ms=30,
-            open_delay_ms=20,
-        )
-
-        coordinator.button_entered(row, "stdout")
-        coordinator.button_left(row, "stdout")
-        QTest.qWait(35)
-        QApplication.processEvents()
-
-        self.assertIsNone(coordinator.current_row)
-        row.manager.get_log_snapshot.assert_not_called()
-        coordinator.shutdown()
-
-    def test_delayed_hide_cancel_and_focus_keep_open(self):
-        row = self.make_row("one", [ready_snapshot("one")])
-        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=1000, hide_delay_ms=30)
-        coordinator.request_open(row, "stdout")
-        coordinator.button_left(row, "stdout")
-        self.assertTrue(coordinator.hide_timer.isActive())
-        coordinator.panel_entered(row)
-        self.assertFalse(coordinator.hide_timer.isActive())
-        coordinator.panel_left(row)
-        row.inline_log_panel.filter_edit.setFocus()
-        QTest.qWait(45)
-        QApplication.processEvents()
-        self.assertTrue(row.inline_log_panel.isVisible())
-        row.inline_log_panel.clearFocus()
-        row.inline_log_panel.filter_edit.clearFocus()
-        coordinator.panel_left(row)
-        QTest.qWait(45)
-        QApplication.processEvents()
-        self.assertFalse(row.inline_log_panel.isVisible())
-        coordinator.shutdown()
-        coordinator.deleteLater()
-
-    def test_filter_change_uses_cached_snapshot_without_disk_read(self):
-        row = self.make_row("one", [ready_snapshot("alpha", "drop-me")])
-        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=1000, hide_delay_ms=30)
-        coordinator.request_open(row, "stdout")
-        self.assertEqual(row.manager.get_log_snapshot.call_count, 1)
-        row.inline_log_panel.filter_edit.setText("!drop-me")
-        QApplication.processEvents()
-        self.assertEqual(row.manager.get_log_snapshot.call_count, 1)
-        self.assertEqual(row.inline_log_panel.log_view.toPlainText(), "alpha")
-        coordinator.shutdown()
-
-    def test_line_count_change_requests_exact_limit(self):
-        row = self.make_row("one", [ready_snapshot("one"), ready_snapshot("two")])
-        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=1000, hide_delay_ms=30)
-        coordinator.request_open(row, "stdout")
-        row.inline_log_panel.line_count.setValue(5000)
-        QApplication.processEvents()
-        self.assertEqual(row.manager.get_log_snapshot.call_args.kwargs["max_lines"], 5000)
-        coordinator.shutdown()
-
-    def test_filter_line_count_and_stream_changes_persist_but_same_stream_reentry_does_not(self):
-        row = self.make_row(
-            "one",
-            [
-                ready_snapshot("out"),
-                ready_snapshot("filtered"),
-                ready_snapshot("stderr"),
-            ],
-        )
-        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=1000, hide_delay_ms=30)
-        coordinator.request_open(row, "stdout")
-        row.persist_log_preferences.reset_mock()
-
-        row.inline_log_panel.filter_edit.setText("alpha")
-        QApplication.processEvents()
-        self.assertEqual(row.persist_log_preferences.call_count, 1)
-
-        row.inline_log_panel.line_count.setValue(5000)
-        QApplication.processEvents()
-        self.assertEqual(row.persist_log_preferences.call_count, 2)
-
-        coordinator.request_open(row, "stderr")
-        self.assertEqual(row.persist_log_preferences.call_count, 3)
-        self.assertEqual(row.inline_log_panel.stream_label.text(), "stderr")
-
-        coordinator.request_open(row, "stderr")
-        self.assertEqual(row.persist_log_preferences.call_count, 3)
-        coordinator.shutdown()
-
-    def test_shutdown_disconnects_all_old_panel_callbacks_and_is_idempotent(self):
-        row = self.make_row("one", [ready_snapshot("one"), ready_snapshot("unexpected")])
-        coordinator = InlineLogPanelCoordinator(refresh_interval_ms=20, hide_delay_ms=15)
-        visibility_changed = MagicMock()
-        coordinator.panel_visibility_changed.connect(visibility_changed)
-        coordinator.request_open(row, "stdout")
-
-        coordinator.shutdown()
-        coordinator.shutdown()
-        visibility_changed.reset_mock()
-        row.manager.get_log_snapshot.reset_mock()
-        row.persist_log_preferences.reset_mock()
-
-        row.inline_log_panel.pointer_entered.emit()
-        row.inline_log_panel.pointer_left.emit()
-        row.inline_log_panel.filter_edit.setText("after-shutdown")
-        row.inline_log_panel.line_count.setValue(5000)
-        QApplication.processEvents()
-        QTest.qWait(30)
-
-        self.assertFalse(coordinator.refresh_timer.isActive())
-        self.assertFalse(coordinator.hide_timer.isActive())
-        self.assertIsNone(coordinator.current_row)
-        self.assertEqual(coordinator._registered_rows, set())
-        self.assertEqual(coordinator._row_callbacks, {})
-        row.manager.get_log_snapshot.assert_not_called()
-        row.persist_log_preferences.assert_not_called()
-        visibility_changed.assert_not_called()
 
 
-class InlineMenuGeometryTests(unittest.TestCase):
-    def test_native_menu_style_forces_scrollable_hint(self):
-        style = NativeScrollableMenuStyle()
-        try:
-            self.assertEqual(
-                style.styleHint(QStyle.StyleHint.SH_Menu_Scrollable),
-                1,
-            )
-        finally:
-            style.deleteLater()
-
-    def test_normal_bottom_and_emergency_geometry(self):
-        available = QRect(0, 0, 1200, 900)
-        normal = compute_inline_menu_geometry(
-            base_menu_size=QSize(700, 400),
-            content_width=760,
-            desired_panel_height=PANEL_PREFERRED_HEIGHT,
-            available_geometry=available,
-            anchor_rect=QRect(1100, 820, 20, 20),
-        )
-        self.assertEqual(normal.panel_height, PANEL_PREFERRED_HEIGHT)
-        self.assertLessEqual(normal.menu_rect.right(), available.right() - 12)
-        self.assertLessEqual(normal.menu_rect.bottom(), available.bottom() - 12)
-
-        emergency = compute_inline_menu_geometry(
-            base_menu_size=QSize(700, 850),
-            content_width=900,
-            desired_panel_height=PANEL_PREFERRED_HEIGHT,
-            available_geometry=available,
-            anchor_rect=QRect(20, 880, 10, 10),
-        )
-        self.assertEqual(emergency.panel_height, PANEL_EMERGENCY_MIN_HEIGHT)
-        self.assertTrue(emergency.native_menu_overflow)
-        self.assertLessEqual(emergency.menu_rect.height(), available.height() - 24)
-        self.assertLessEqual(emergency.menu_rect.width(), available.width() - 24)
 
 
 if __name__ == "__main__":

@@ -7,11 +7,9 @@ from unittest.mock import MagicMock
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtTest import QSignalSpy, QTest
-from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QWidget
 
 from lib.ui.app_tools import AppToolActionResult
-from lib.ui.inline_log_panel import InlineLogPanel, InlineLogPanelCoordinator
-from lib.ui.log_reader import LogSnapshot, LogSnapshotState
 from multi import AppControlWidget, AppNameLabel, SystemTrayApp
 
 
@@ -30,11 +28,9 @@ class AppNameLabelTests(unittest.TestCase):
         QApplication.processEvents()
         try:
             clicked = QSignalSpy(label.left_clicked)
-
             QTest.mouseClick(label, Qt.MouseButton.LeftButton)
             QTest.mouseClick(label, Qt.MouseButton.RightButton)
             QTest.mouseClick(label, Qt.MouseButton.MiddleButton)
-
             self.assertEqual(len(clicked), 1)
             self.assertFalse(hasattr(label, "context_requested"))
         finally:
@@ -59,13 +55,6 @@ class AppRowInteractionTests(unittest.TestCase):
             "text": "PID: -",
             "tooltip": "Last run PID unavailable",
         }
-        manager.get_log_snapshot.return_value = LogSnapshot(
-            "C:/work/demo.out.log",
-            LogSnapshotState.READY,
-            lines=("log",),
-            size_bytes=4,
-            file_identity=(1, 1),
-        )
         manager.open_workdir.return_value = AppToolActionResult(
             True,
             "OPENED",
@@ -74,41 +63,32 @@ class AppRowInteractionTests(unittest.TestCase):
         )
         return manager
 
-    def make_widget(self, manager=None, notifier=None, coordinator=None):
-        menu = QMenu()
-        host = QWidget(menu)
-        QVBoxLayout(host).setContentsMargins(0, 0, 0, 0)
-        coordinator = coordinator or InlineLogPanelCoordinator(menu)
+    def make_widget(self, manager=None, notifier=None, controller=None):
+        host = QWidget()
         widget = AppControlWidget(
             manager or self.make_manager(),
-            menu,
-            notifier,
-            coordinator,
-            panel_parent=host,
+            parent=host,
+            result_notifier=notifier,
+            log_controller=controller,
         )
         widget.show()
         QApplication.processEvents()
-        self.addCleanup(self.dispose, widget, host, menu, coordinator)
-        return widget, host
+        self.addCleanup(self.dispose, widget, host)
+        return widget
 
     @staticmethod
-    def dispose(widget, host, menu, coordinator):
+    def dispose(widget, host):
         widget.shutdown()
-        if hasattr(coordinator, "shutdown"):
-            coordinator.shutdown()
         widget.close()
         widget.deleteLater()
         host.deleteLater()
-        menu.deleteLater()
         QApplication.processEvents()
 
     def test_name_left_click_opens_folder_and_right_click_does_nothing(self):
         manager = self.make_manager()
-        widget, _host = self.make_widget(manager)
-
+        widget = self.make_widget(manager)
         QTest.mouseClick(widget.lbl_name, Qt.MouseButton.LeftButton)
         QTest.mouseClick(widget.lbl_name, Qt.MouseButton.RightButton)
-
         manager.open_workdir.assert_called_once_with()
         self.assertIn("Left-click", widget.lbl_name.toolTip())
         self.assertNotIn("Right-click", widget.lbl_name.toolTip())
@@ -119,7 +99,7 @@ class AppRowInteractionTests(unittest.TestCase):
         notifier = MagicMock()
         manager = self.make_manager()
         manager.open_workdir.return_value = failure("folder vanished")
-        widget, _host = self.make_widget(manager, notifier)
+        widget = self.make_widget(manager, notifier)
 
         QTest.mouseClick(widget.lbl_name, Qt.MouseButton.LeftButton)
         notifier.assert_called_once_with(manager.name, manager.open_workdir.return_value)
@@ -129,18 +109,13 @@ class AppRowInteractionTests(unittest.TestCase):
         QTest.mouseClick(widget.lbl_name, Qt.MouseButton.LeftButton)
         notifier.assert_not_called()
 
-    def test_log_panel_is_hosted_outside_the_row(self):
-        widget, host = self.make_widget()
-
-        self.assertIsInstance(widget.inline_log_panel, InlineLogPanel)
-        self.assertIs(widget.inline_log_panel.parentWidget(), host)
-        self.assertEqual(widget.layout().count(), 1)
-        self.assertIs(widget.layout().itemAt(0).widget(), widget.top_row)
-
-    def test_log_hover_routes_to_shared_coordinator_and_clicks_still_open_files(self):
+    def test_row_owns_no_log_panel_and_routes_hover_to_shared_controller(self):
         manager = self.make_manager()
-        coordinator = MagicMock()
-        widget, _host = self.make_widget(manager, coordinator=coordinator)
+        controller = MagicMock()
+        widget = self.make_widget(manager, controller=controller)
+
+        self.assertFalse(hasattr(widget, "inline_log_panel"))
+        self.assertIs(widget.log_controller, controller)
 
         widget.btn_ologs.hover_entered.emit()
         widget.btn_ologs.hover_left.emit()
@@ -149,11 +124,10 @@ class AppRowInteractionTests(unittest.TestCase):
         QTest.mouseClick(widget.btn_ologs, Qt.MouseButton.LeftButton)
         QTest.mouseClick(widget.btn_elogs, Qt.MouseButton.LeftButton)
 
-        coordinator.register_row.assert_called_once_with(widget)
-        coordinator.button_entered.assert_any_call(widget, "stdout")
-        coordinator.button_left.assert_any_call(widget, "stdout")
-        coordinator.button_entered.assert_any_call(widget, "stderr")
-        coordinator.button_left.assert_any_call(widget, "stderr")
+        controller.hover_enter.assert_any_call(widget.log_target, "stdout")
+        controller.hover_leave.assert_any_call(widget.log_target, "stdout")
+        controller.hover_enter.assert_any_call(widget.log_target, "stderr")
+        controller.hover_leave.assert_any_call(widget.log_target, "stderr")
         manager.view_output_log.assert_called_once_with(False)
         manager.view_error_log.assert_called_once_with(False)
 
@@ -162,9 +136,7 @@ class TrayFailureNotificationTests(unittest.TestCase):
     def test_folder_failure_notification_is_non_modal(self):
         tray = type("Tray", (), {"showMessage": MagicMock()})()
         result = failure("could not open")
-
         SystemTrayApp.notify_app_tool_failure(tray, "Demo", result)
-
         tray.showMessage.assert_called_once_with(
             "Open folder failed",
             "Demo: could not open",

@@ -125,11 +125,15 @@ Các path tương đối được resolve từ thư mục chứa file config.
 
 ## Thao tác trong tray
 
-- nhấp trái tên app để mở working directory của app;
-- **Open Config** mở đúng file YAML mà launcher hiện tại đang dùng;
-- **Stop All Apps**, **Restart Launcher** và **Exit Launcher** giữ nguyên chức năng tương ứng.
+Chuột phải icon tray mở `TrayPanelWindow`, một cửa sổ Qt độc lập thay vì nhét widget tương tác vào `QMenu`.
 
-Tên app không có menu chuột phải riêng. Cấu hình dùng chung được mở từ menu tray thay vì khai báo lặp lại theo từng app.
+- nhấp trái tên app để mở working directory của app;
+- nhấp phải tên app hoặc vùng trống trong row không thực hiện action;
+- **Open Config** mở đúng file YAML mà launcher hiện tại đang dùng;
+- **Stop All Apps**, **Restart Launcher** và **Exit Launcher** giữ nguyên chức năng tương ứng;
+- phím `Escape` ẩn tray panel.
+
+Các click bên trong label, row, filter, log text hoặc scrollbar không làm tray panel tự đóng. Tên app không có menu chuột phải riêng; cấu hình dùng chung được mở từ tray panel.
 
 ### Cách viết `args`
 
@@ -202,7 +206,21 @@ Supervisor giữ log handles, vì vậy log tiếp tục được ghi khi launch
 
 ## Inline live logs
 
-Hover trên **O.Logs** hoặc **E.Logs** mở một panel log cố định phía trên danh sách app; tại một thời điểm chỉ có một panel. Panel đổi sang app và stream đang hover, còn chiều cao từng app row không đổi. Menu mở rộng lên trên và giữ các action trong vùng làm việc của màn hình. Nhấp nút vẫn mở file log như trước. Panel cập nhật theo chu kỳ 500 ms và có các điều khiển:
+Hover trên **O.Logs** hoặc **E.Logs** mở một popup độc lập tại vị trí cố định ngay phía trên tray panel. `LogPopupWindow` là top-level window riêng và chỉ sở hữu một `InlineLogPanel`, bất kể config có bao nhiêu app. Việc mở, chuyển stream hoặc ẩn popup không thay đổi geometry của tray panel và không rebuild app rows. Nhấp nút vẫn mở file log bằng ứng dụng mặc định.
+
+Flow hiển thị được tách thành các block:
+
+```text
+HoverLogButton
+-> LogHoverController (debounce 80 ms, ownership, lifecycle)
+-> LatestLogReader (background thread, latest-wins)
+-> LogPopupWindow
+-> InlineLogPanel (render/filter/scroll only)
+```
+
+Mọi thao tác path và file I/O chạy trong worker. Khi rê nhanh qua nhiều nút, pending request cũ bị thay thế và snapshot stale bị bỏ qua. Khi chuyển target, popup giữ nội dung hiện tại với trạng thái `Loading…`, sau đó thay document đúng một lần khi snapshot mới về. Chu kỳ refresh live là 500 ms.
+
+Popup có các điều khiển:
 
 - stream `stdout` hoặc `stderr` theo nút đang hover;
 - **Lines** mặc định **100 dòng**, cho phép **10–5000**;

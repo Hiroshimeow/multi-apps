@@ -10,13 +10,14 @@ SAMPLE = ROOT / "setting.yaml.sample"
 
 
 class PublicDocumentationContractTests(unittest.TestCase):
-    def test_readme_documents_tray_config_top_logs_and_preferences(self):
+    def test_readme_documents_independent_popup_and_preferences(self):
         text = README.read_text(encoding="utf-8")
-
         for required in (
             "Open Config",
             "nhấp trái tên app",
-            "phía trên danh sách app",
+            "popup độc lập",
+            "không thay đổi geometry của tray panel",
+            "latest-wins",
             "## Inline live logs",
             "[alpha,beta,!drop-me]",
             "Live paused while scrolled",
@@ -27,7 +28,12 @@ class PublicDocumentationContractTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, text)
 
-        for removed in ("Open terminal here", "## App tools", "`tools`"):
+        for removed in (
+            "Open terminal here",
+            "## App tools",
+            "`tools`",
+            "Menu mở rộng lên trên",
+        ):
             with self.subTest(removed=removed):
                 self.assertNotIn(removed, text)
 
@@ -47,7 +53,6 @@ class PublicDocumentationContractTests(unittest.TestCase):
             "close_timeout",
             "os",
         }
-
         self.assertEqual(len(apps), 11)
         for app in apps:
             with self.subTest(app=app["id"]):

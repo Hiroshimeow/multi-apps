@@ -1,21 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial
-
-from PyQt6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
-    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
-    QProxyStyle,
     QSizePolicy,
     QSpinBox,
-    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -35,20 +30,12 @@ from .log_reader import (
 )
 
 PANEL_PREFERRED_HEIGHT = 220
-PANEL_NORMAL_MIN_HEIGHT = 180
 PANEL_MAX_HEIGHT = 260
 PANEL_EMERGENCY_MIN_HEIGHT = 96
-SCREEN_MARGIN = 12
 PANEL_OUTER_MARGINS_HORIZONTAL = 6
 PANEL_OUTER_MARGINS_VERTICAL = 5
 PANEL_SPACING = 4
 FILTER_SOFT_MIN_WIDTH = 160
-REFRESH_INTERVAL_MS = 500
-HIDE_DELAY_MS = 300
-OPEN_DELAY_MS = 80
-DEFAULT_REFRESH_INTERVAL_MS = REFRESH_INTERVAL_MS
-DEFAULT_HIDE_DELAY_MS = HIDE_DELAY_MS
-DEFAULT_OPEN_DELAY_MS = OPEN_DELAY_MS
 
 _FILTER_TOOLTIP = (
     "Comma-separated literal terms; !term excludes; outer brackets are optional; "
@@ -63,95 +50,6 @@ _PALETTE = (
     ("#FFCC80", "#111111"),
     ("#D1C4E9", "#111111"),
 )
-
-
-@dataclass(frozen=True, slots=True)
-class InlineMenuGeometry:
-    panel_height: int
-    menu_rect: QRect
-    width_cap: int
-    height_cap: int
-    native_menu_overflow: bool
-
-
-def compute_inline_menu_geometry(
-    *,
-    base_menu_size: QSize,
-    content_width: int,
-    desired_panel_height: int,
-    available_geometry: QRect,
-    anchor_rect: QRect,
-    preserve_origin: bool = False,
-) -> InlineMenuGeometry:
-    if preserve_origin:
-        x = min(
-            max(anchor_rect.left(), available_geometry.left()),
-            available_geometry.right(),
-        )
-        y = min(
-            max(anchor_rect.top(), available_geometry.top()),
-            available_geometry.bottom(),
-        )
-        width_cap = max(1, available_geometry.right() - x + 1)
-        height_cap = max(1, available_geometry.bottom() - y + 1)
-    else:
-        width_cap = max(1, available_geometry.width() - 2 * SCREEN_MARGIN)
-        height_cap = max(1, available_geometry.height() - 2 * SCREEN_MARGIN)
-
-    if desired_panel_height <= 0:
-        panel_height = 0
-        overflow = False
-    elif preserve_origin:
-        panel_height = min(
-            PANEL_MAX_HEIGHT,
-            max(PANEL_NORMAL_MIN_HEIGHT, desired_panel_height),
-        )
-        overflow = False
-    else:
-        desired = min(
-            PANEL_MAX_HEIGHT,
-            max(PANEL_NORMAL_MIN_HEIGHT, desired_panel_height),
-        )
-        normal_budget = height_cap - max(0, base_menu_size.height())
-        if normal_budget >= PANEL_NORMAL_MIN_HEIGHT:
-            panel_height = min(desired, normal_budget)
-            overflow = False
-        elif normal_budget >= PANEL_EMERGENCY_MIN_HEIGHT:
-            panel_height = normal_budget
-            overflow = False
-        else:
-            panel_height = PANEL_EMERGENCY_MIN_HEIGHT
-            overflow = True
-
-    menu_width = min(width_cap, max(base_menu_size.width(), int(content_width)))
-    natural_height = max(1, base_menu_size.height() + panel_height)
-    menu_height = min(height_cap, natural_height)
-    overflow = overflow or natural_height > height_cap
-
-    if not preserve_origin:
-        left = available_geometry.left() + SCREEN_MARGIN
-        top = available_geometry.top() + SCREEN_MARGIN
-        right = available_geometry.right() - SCREEN_MARGIN + 1
-        bottom = available_geometry.bottom() - SCREEN_MARGIN + 1
-        requested_x = anchor_rect.left()
-        requested_y = anchor_rect.bottom() - menu_height + 1
-        x = min(max(requested_x, left), max(left, right - menu_width))
-        y = min(max(requested_y, top), max(top, bottom - menu_height))
-
-    return InlineMenuGeometry(
-        panel_height=int(panel_height),
-        menu_rect=QRect(int(x), int(y), int(menu_width), int(menu_height)),
-        width_cap=int(width_cap),
-        height_cap=int(height_cap),
-        native_menu_overflow=bool(overflow),
-    )
-
-
-class NativeScrollableMenuStyle(QProxyStyle):
-    def styleHint(self, hint, option=None, widget=None, returnData=None):
-        if hint == QStyle.StyleHint.SH_Menu_Scrollable:
-            return 1
-        return super().styleHint(hint, option, widget, returnData)
 
 
 class LogRangeHighlighter(QSyntaxHighlighter):
@@ -321,9 +219,13 @@ class InlineLogPanel(QFrame):
         self.pointer_left.emit()
         super().leaveEvent(event)
 
-    def set_stream(self, stream):
+    @staticmethod
+    def _validate_stream(stream):
         if stream not in {"stdout", "stderr"}:
             raise ValueError("stream must be stdout or stderr")
+
+    def set_stream(self, stream):
+        self._validate_stream(stream)
         if self.stream_label.text() != stream:
             self.stream_label.setText(stream)
             self._snapshot = None
@@ -331,6 +233,24 @@ class InlineLogPanel(QFrame):
             self._display_lines = ()
             self.highlighter.set_ranges(())
             self.log_view.clear()
+
+    def prepare_stream(self, stream):
+        """Switch target metadata without repainting the document twice."""
+        self._validate_stream(stream)
+        self.stream_label.setText(stream)
+        self._snapshot = None
+        self._display_signature = None
+        self._set_primary_state("Loading?", "Reading newest log snapshot")
+
+    def configure_controls(self, *, line_count, filter_expression, stream):
+        """Apply persisted controls as one silent renderer operation."""
+        self._suppress_control_signals = True
+        try:
+            self.line_count.setValue(int(line_count))
+            self.filter_edit.setText(str(filter_expression))
+        finally:
+            self._suppress_control_signals = False
+        self.prepare_stream(stream)
 
     def reset(self):
         self._snapshot = None
@@ -600,268 +520,11 @@ class InlineLogPanel(QFrame):
         )
 
 
-class InlineLogPanelCoordinator(QObject):
-    panel_visibility_changed = pyqtSignal(bool)
-
-    def __init__(
-        self,
-        parent=None,
-        *,
-        refresh_interval_ms=DEFAULT_REFRESH_INTERVAL_MS,
-        hide_delay_ms=DEFAULT_HIDE_DELAY_MS,
-        open_delay_ms=DEFAULT_OPEN_DELAY_MS,
-        generation=0,
-    ):
-        super().__init__(parent)
-        self.current_row = None
-        self.current_stream = None
-        self.generation = int(generation)
-        self._active_generation = int(generation)
-        self._button_hovered = False
-        self._panel_hovered = False
-        self._pending_row = None
-        self._pending_stream = None
-        self._registered_rows = set()
-        self._row_callbacks = {}
-        self._shutdown = False
-
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.setInterval(int(refresh_interval_ms))
-        self.refresh_timer.timeout.connect(self.refresh_current)
-        self.hide_timer = QTimer(self)
-        self.hide_timer.setSingleShot(True)
-        self.hide_timer.setInterval(int(hide_delay_ms))
-        self.hide_timer.timeout.connect(self._hide_if_unkept)
-        self.open_timer = QTimer(self)
-        self.open_timer.setSingleShot(True)
-        self.open_timer.setInterval(int(open_delay_ms))
-        self.open_timer.timeout.connect(self._open_pending)
-        QApplication.instance().focusChanged.connect(self._focus_changed)
-
-    def register_row(self, row):
-        if self._shutdown:
-            return
-        key = id(row)
-        if key in self._registered_rows:
-            return
-        self._registered_rows.add(key)
-        panel = row.inline_log_panel
-        callbacks = (
-            (panel.pointer_entered, partial(self.panel_entered, row)),
-            (panel.pointer_left, partial(self.panel_left, row)),
-            (panel.filter_changed, partial(self._filter_changed, row)),
-            (
-                panel.line_count_changed,
-                partial(self._line_count_signal, row),
-            ),
-        )
-        for signal, callback in callbacks:
-            signal.connect(callback)
-        self._row_callbacks[key] = callbacks
-
-    def request_open(self, row, stream):
-        if stream not in {"stdout", "stderr"}:
-            raise ValueError("stream must be stdout or stderr")
-        if self._shutdown:
-            return
-        self.register_row(row)
-        self.hide_timer.stop()
-        panel_was_open = self.current_row is not None
-        same_row = row is self.current_row
-        same_stream = same_row and stream == self.current_stream
-        if same_stream:
-            self._button_hovered = True
-            self.refresh_timer.start()
-            return
-        if self.current_row is not None and not same_row:
-            self.current_row.inline_log_panel.hide()
-            self.current_row.inline_log_panel.reset()
-        self.current_row = row
-        self.current_stream = stream
-        self._button_hovered = True
-        stream_changed = row.inline_log_panel.stream_label.text() != stream
-        if stream_changed:
-            row.inline_log_panel.set_stream(stream)
-            self._persist_row(row)
-        row.inline_log_panel.show()
-        if not panel_was_open:
-            self.panel_visibility_changed.emit(True)
-        self.refresh_current(reset_bottom=not same_stream)
-        self.refresh_timer.start()
-
-    def button_entered(self, row, stream):
-        if self._shutdown:
-            return
-        self._button_hovered = True
-        self.hide_timer.stop()
-        if row is self.current_row and stream == self.current_stream:
-            self.open_timer.stop()
-            self._pending_row = None
-            self._pending_stream = None
-            self.refresh_timer.start()
-            return
-        self._pending_row = row
-        self._pending_stream = stream
-        self.open_timer.start()
-
-    def button_left(self, row, stream):
-        pending_match = row is self._pending_row and stream == self._pending_stream
-        current_match = row is self.current_row and stream == self.current_stream
-        if pending_match:
-            self.open_timer.stop()
-            self._pending_row = None
-            self._pending_stream = None
-        if pending_match or current_match:
-            self._button_hovered = False
-            self._schedule_hide()
-
-    def _open_pending(self):
-        row = self._pending_row
-        stream = self._pending_stream
-        self._pending_row = None
-        self._pending_stream = None
-        if self._shutdown or row is None or stream is None or not self._button_hovered:
-            return
-        self.request_open(row, stream)
-
-    def panel_entered(self, row):
-        if row is self.current_row:
-            self.open_timer.stop()
-            self._pending_row = None
-            self._pending_stream = None
-            self._panel_hovered = True
-            self.hide_timer.stop()
-
-    def panel_left(self, row):
-        if row is self.current_row:
-            self._panel_hovered = False
-            self._schedule_hide()
-
-    def _focus_changed(self, _old, now):
-        if self.current_row is None:
-            return
-        panel = self.current_row.inline_log_panel
-        if now is panel or (now is not None and panel.isAncestorOf(now)):
-            self.hide_timer.stop()
-        elif not self._button_hovered and not self._panel_hovered:
-            self._schedule_hide()
-
-    def _focus_within_panel(self):
-        if self.current_row is None:
-            return False
-        focus = QApplication.focusWidget()
-        panel = self.current_row.inline_log_panel
-        return focus is panel or (focus is not None and panel.isAncestorOf(focus))
-
-    def _schedule_hide(self):
-        if self.current_row is not None and not self._keep_open():
-            self.hide_timer.start()
-
-    def _keep_open(self):
-        return self._button_hovered or self._panel_hovered or self._focus_within_panel()
-
-    def _hide_if_unkept(self):
-        if not self._keep_open():
-            self.hide_current()
-
-    @staticmethod
-    def _persist_row(row):
-        persist = getattr(row, "persist_log_preferences", None)
-        if callable(persist):
-            persist()
-
-    def _filter_changed(self, row):
-        if row is self.current_row:
-            row.inline_log_panel.apply_cached_filter(reset_bottom=True)
-            self._persist_row(row)
-
-    def _line_count_signal(self, row, _value):
-        self._line_count_changed(row)
-
-    def _line_count_changed(self, row):
-        if row is self.current_row:
-            self.refresh_current(reset_bottom=True)
-            self._persist_row(row)
-
-    def refresh_current(self, *, reset_bottom=False):
-        if self.current_row is None:
-            return None
-        row = self.current_row
-        stream_key = "out" if self.current_stream == "stdout" else "err"
-        snapshot = row.manager.get_log_snapshot(
-            stream_key,
-            max_lines=row.inline_log_panel.line_count.value(),
-            max_bytes=DEFAULT_MAX_BYTES,
-        )
-        row.inline_log_panel.update_snapshot(snapshot, reset_bottom=reset_bottom)
-        return snapshot
-
-    def hide_current(self):
-        self.refresh_timer.stop()
-        self.hide_timer.stop()
-        self.open_timer.stop()
-        self._pending_row = None
-        self._pending_stream = None
-        if self.current_row is not None:
-            self.current_row.inline_log_panel.hide()
-            self.panel_visibility_changed.emit(False)
-        self.current_row = None
-        self.current_stream = None
-        self._button_hovered = False
-        self._panel_hovered = False
-
-    def close_for_menu_hide(self):
-        self.hide_current()
-
-    def shutdown(self):
-        if self._shutdown:
-            return
-        self._shutdown = True
-        self._active_generation += 1
-        self.hide_current()
-        application = QApplication.instance()
-        if application is not None:
-            try:
-                application.focusChanged.disconnect(self._focus_changed)
-            except (TypeError, RuntimeError):
-                pass
-        parent = self.parent()
-        if parent is not None and hasattr(parent, "aboutToHide"):
-            try:
-                parent.aboutToHide.disconnect(self.close_for_menu_hide)
-            except (TypeError, RuntimeError):
-                pass
-        for callbacks in tuple(self._row_callbacks.values()):
-            for signal, callback in callbacks:
-                try:
-                    signal.disconnect(callback)
-                except (TypeError, RuntimeError):
-                    pass
-        self._row_callbacks.clear()
-        self._registered_rows.clear()
-        try:
-            self.panel_visibility_changed.disconnect()
-        except (TypeError, RuntimeError):
-            pass
-
-
 __all__ = [
-    "DEFAULT_HIDE_DELAY_MS",
-    "DEFAULT_OPEN_DELAY_MS",
-    "DEFAULT_REFRESH_INTERVAL_MS",
     "FILTER_SOFT_MIN_WIDTH",
-    "HIDE_DELAY_MS",
-    "OPEN_DELAY_MS",
     "InlineLogPanel",
-    "InlineLogPanelCoordinator",
-    "InlineMenuGeometry",
     "LogRangeHighlighter",
-    "NativeScrollableMenuStyle",
     "PANEL_EMERGENCY_MIN_HEIGHT",
     "PANEL_MAX_HEIGHT",
-    "PANEL_NORMAL_MIN_HEIGHT",
     "PANEL_PREFERRED_HEIGHT",
-    "REFRESH_INTERVAL_MS",
-    "SCREEN_MARGIN",
-    "compute_inline_menu_geometry",
 ]

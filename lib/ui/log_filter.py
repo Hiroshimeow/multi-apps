@@ -158,13 +158,15 @@ def apply_log_filter(lines: Sequence[str], spec: LogFilterSpec) -> LogFilterResu
         if any(term in folded_line for term in exclusions):
             excluded_count += 1
             continue
-        kept.append(
-            FilteredLine(
-                index,
-                line,
-                _highlight_ranges_folded(line, folded_line, positive_terms),
-            )
+        highlights = _highlight_ranges_folded(
+            line,
+            folded_line,
+            positive_terms,
         )
+        if positive_terms and not highlights:
+            excluded_count += 1
+            continue
+        kept.append(FilteredLine(index, line, highlights))
 
     state = (
         LogFilterResultState.FULLY_FILTERED
