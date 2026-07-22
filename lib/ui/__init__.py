@@ -26,7 +26,13 @@ from .lifecycle_commands import BackgroundCommandExecutor, LifecycleCommandContr
 from .log_hover import LatestLogReader, LogHoverController, LogTarget
 from .log_preference_owner import LogPreferenceOwner
 from .log_popup import LogPopupWindow, compute_log_popup_rect
-from .pinned_logs import MultiLogReader, PinnedLogManager, compute_pinned_log_rects
+from .pinned_logs import (
+    MultiLogReader,
+    PinnedLogManager,
+    compute_initial_pinned_log_rect,
+    compute_pinned_log_rects,
+    recover_pinned_log_rect,
+)
 from .log_preferences import (
     LogPanelPreference,
     LogPanelPreferenceStore,
@@ -50,6 +56,7 @@ from .tray_panel import TrayActionButton, TrayPanelWindow, compute_tray_panel_re
 from .transient_ui import TransientUiController
 
 __all__ = [
+    "compute_initial_pinned_log_rect",
     "compute_pinned_log_rects",
     "compute_context_popup_rect",
     "TransientUiController",
@@ -102,4 +109,5 @@ __all__ = [
     "default_log_preferences_path",
     "highlight_ranges",
     "parse_filter_expression",
+    "recover_pinned_log_rect",
 ]

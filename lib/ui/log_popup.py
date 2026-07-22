@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QFrame, QVBoxLayout
 from .inline_log_panel import InlineLogPanel, PANEL_PREFERRED_HEIGHT
 
 POPUP_MARGIN = 12
+POPUP_RIGHT_MARGIN = 0
 POPUP_PANEL_GAP = 8
 
 
@@ -17,7 +18,7 @@ def compute_log_popup_rect(
     """Place the live-log popup above the tray panel without moving either."""
     width = min(
         max(1, requested_size.width()),
-        max(1, available_geometry.width() - 2 * POPUP_MARGIN),
+        max(1, available_geometry.width() - POPUP_MARGIN - POPUP_RIGHT_MARGIN),
     )
     height = min(
         max(1, requested_size.height()),
@@ -25,14 +26,11 @@ def compute_log_popup_rect(
     )
 
     left_limit = available_geometry.left() + POPUP_MARGIN
-    right_limit = available_geometry.right() - POPUP_MARGIN
+    right_limit = available_geometry.right() - POPUP_RIGHT_MARGIN
     top_limit = available_geometry.top() + POPUP_MARGIN
     bottom_limit = available_geometry.bottom() - POPUP_MARGIN
 
-    x = min(
-        max(tray_panel_rect.left(), left_limit),
-        max(left_limit, right_limit - width + 1),
-    )
+    x = max(left_limit, right_limit - width + 1)
     y = tray_panel_rect.top() - POPUP_PANEL_GAP - height
     y = min(max(y, top_limit), max(top_limit, bottom_limit - height + 1))
 
@@ -95,5 +93,6 @@ __all__ = [
     "LogPopupWindow",
     "POPUP_MARGIN",
     "POPUP_PANEL_GAP",
+    "POPUP_RIGHT_MARGIN",
     "compute_log_popup_rect",
 ]

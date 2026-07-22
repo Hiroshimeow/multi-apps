@@ -26,7 +26,7 @@ class TrayPanelGeometryTests(unittest.TestCase):
         )
 
         self.assertEqual(rect.size(), QSize(620, 560))
-        self.assertLessEqual(rect.right(), available.right() - 12)
+        self.assertEqual(rect.right(), available.right())
         self.assertLessEqual(rect.bottom(), anchor.top() - 8)
         self.assertGreaterEqual(rect.left(), available.left() + 12)
         self.assertGreaterEqual(rect.top(), available.top() + 12)

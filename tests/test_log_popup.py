@@ -31,7 +31,7 @@ class LogPopupGeometryTests(unittest.TestCase):
         self.assertEqual(popup_rect.bottom(), panel_rect.top() - 9)
         self.assertGreaterEqual(popup_rect.left(), available.left() + 12)
         self.assertGreaterEqual(popup_rect.top(), available.top() + 12)
-        self.assertLessEqual(popup_rect.right(), available.right() - 12)
+        self.assertEqual(popup_rect.right(), available.right())
 
 
 class LogPopupWindowTests(unittest.TestCase):

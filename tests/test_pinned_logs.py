@@ -14,7 +14,13 @@ from PyQt6.QtWidgets import QApplication
 
 from lib.ui.log_hover import LogTarget
 from lib.ui.log_preferences import LogPanelPreferenceStore
-from lib.ui.pinned_logs import MultiLogReader, PinnedLogManager, compute_pinned_log_rects
+from lib.ui.pinned_logs import (
+    MultiLogReader,
+    PinnedLogManager,
+    compute_initial_pinned_log_rect,
+    compute_pinned_log_rects,
+    recover_pinned_log_rect,
+)
 
 
 _QT_APP = QApplication.instance() or QApplication([])
@@ -83,6 +89,72 @@ class MultiLogReaderTests(unittest.TestCase):
 
 
 class PinnedLogGeometryTests(unittest.TestCase):
+    def test_initial_rect_aligns_to_right_edge_on_offset_monitor(self):
+        available = QRect(1920, -200, 2560, 1400)
+        tray = QRect(3860, 700, 620, 300)
+
+        rect = compute_initial_pinned_log_rect(
+            QSize(620, 220),
+            QSize(520, 96),
+            tray,
+            available,
+        )
+
+        self.assertEqual(rect.right(), available.right())
+        self.assertTrue(available.contains(rect), rect)
+
+    def test_initial_rect_skips_occupied_slot_without_mutating_existing_rect(self):
+        available = QRect(0, 0, 1600, 1000)
+        tray = QRect(980, 700, 620, 240)
+        requested = QSize(620, 220)
+        minimum = QSize(520, 96)
+        first = compute_initial_pinned_log_rect(
+            requested,
+            minimum,
+            tray,
+            available,
+        )
+        original_first = QRect(first)
+
+        second = compute_initial_pinned_log_rect(
+            requested,
+            minimum,
+            tray,
+            available,
+            (first,),
+        )
+
+        self.assertEqual(first, original_first)
+        self.assertFalse(first.intersects(second), (first, second))
+        self.assertTrue(available.contains(second), second)
+        self.assertLessEqual(second.width(), requested.width())
+        self.assertLessEqual(second.height(), requested.height())
+        self.assertGreaterEqual(second.width(), minimum.width())
+        self.assertGreaterEqual(second.height(), minimum.height())
+
+    def test_recovery_preserves_visible_geometry_and_clamps_inaccessible_geometry(self):
+        first_screen = QRect(-1920, 0, 1920, 1080)
+        fallback = QRect(0, 0, 1600, 1000)
+        visible = QRect(-20, 100, 620, 220)
+
+        unchanged = recover_pinned_log_rect(
+            visible,
+            QSize(520, 96),
+            (first_screen, fallback),
+            fallback,
+        )
+        recovered = recover_pinned_log_rect(
+            QRect(-5000, -4000, 2000, 1200),
+            QSize(520, 96),
+            (first_screen, fallback),
+            fallback,
+        )
+
+        self.assertEqual(unchanged, visible)
+        self.assertTrue(fallback.contains(recovered), recovered)
+        self.assertGreaterEqual(recovered.width(), 520)
+        self.assertGreaterEqual(recovered.height(), 96)
+
     def test_eleven_pinned_logs_stay_inside_screen_without_overlap(self):
         available = QRect(0, 0, 1920, 1032)
         tray = QRect(1288, 610, 620, 380)

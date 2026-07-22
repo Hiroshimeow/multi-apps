@@ -15,6 +15,7 @@ from .log_reader import BoundedLogReader, DEFAULT_MAX_BYTES, LogSnapshot, LogSna
 
 PINNED_GAP = 8
 PINNED_MARGIN = 12
+PINNED_RIGHT_MARGIN = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +143,161 @@ class _PinnedSession:
             self.request_reset_bottom = {}
 
 
+def _pinned_bounds(tray_rect: QRect, available: QRect):
+    left = available.left() + PINNED_MARGIN
+    right = available.right() - PINNED_RIGHT_MARGIN
+    top = available.top() + PINNED_MARGIN
+    bottom = min(
+        available.bottom() - PINNED_MARGIN,
+        tray_rect.top() - PINNED_GAP - 1,
+    )
+    if right < left:
+        left, right = available.left(), available.right()
+    if bottom < top:
+        top = available.top() + PINNED_MARGIN
+        bottom = available.bottom() - PINNED_MARGIN
+    if bottom < top:
+        top, bottom = available.top(), available.bottom()
+    return left, right, top, bottom
+
+
+def _clamped_pinned_size(
+    requested_size: QSize,
+    minimum_size: QSize,
+    available_width: int,
+    available_height: int,
+) -> QSize:
+    available_width = max(1, int(available_width))
+    available_height = max(1, int(available_height))
+    minimum_width = min(max(1, minimum_size.width()), available_width)
+    minimum_height = min(max(1, minimum_size.height()), available_height)
+    return QSize(
+        min(max(minimum_width, requested_size.width()), available_width),
+        min(max(minimum_height, requested_size.height()), available_height),
+    )
+
+
+def _pinned_candidates(size: QSize, bounds):
+    left, right, top, bottom = bounds
+    width = size.width()
+    height = size.height()
+    usable_width = right - left + 1
+    usable_height = bottom - top + 1
+    columns = max(1, (usable_width + PINNED_GAP) // (width + PINNED_GAP))
+    rows = max(1, (usable_height + PINNED_GAP) // (height + PINNED_GAP))
+    for column in range(columns):
+        x = right - width + 1 - column * (width + PINNED_GAP)
+        for row in range(rows):
+            y = bottom - height + 1 - row * (height + PINNED_GAP)
+            if x >= left and y >= top:
+                yield QRect(int(x), int(y), int(width), int(height))
+
+
+def compute_initial_pinned_log_rect(
+    requested_size: QSize,
+    minimum_size: QSize,
+    tray_rect: QRect,
+    available: QRect,
+    occupied_rects: tuple[QRect, ...] = (),
+) -> QRect:
+    """Place only a newly pinned log; existing user geometry is read-only."""
+    bounds = _pinned_bounds(tray_rect, available)
+    left, right, top, bottom = bounds
+    usable_width = right - left + 1
+    usable_height = bottom - top + 1
+    occupied = tuple(QRect(rect) for rect in occupied_rects)
+    preferred = _clamped_pinned_size(
+        requested_size,
+        minimum_size,
+        usable_width,
+        usable_height,
+    )
+
+    def first_free(size):
+        for candidate in _pinned_candidates(size, bounds):
+            if not any(candidate.intersects(rect) for rect in occupied):
+                return candidate
+        return None
+
+    candidate = first_free(preferred)
+    if candidate is not None:
+        return candidate
+
+    count = len(occupied) + 1
+    minimum = _clamped_pinned_size(
+        minimum_size,
+        minimum_size,
+        usable_width,
+        usable_height,
+    )
+    max_rows = max(
+        1,
+        (usable_height + PINNED_GAP)
+        // (minimum.height() + PINNED_GAP),
+    )
+    rows = min(count, max_rows)
+    columns = math.ceil(count / rows)
+    fit = _clamped_pinned_size(
+        QSize(
+            max(1, (usable_width - (columns - 1) * PINNED_GAP) // columns),
+            max(1, (usable_height - (rows - 1) * PINNED_GAP) // rows),
+        ),
+        minimum,
+        usable_width,
+        usable_height,
+    )
+    if fit != preferred:
+        candidate = first_free(fit)
+        if candidate is not None:
+            return candidate
+
+    width, height = fit.width(), fit.height()
+    offset = len(occupied) * 32
+    horizontal_room = max(0, usable_width - width)
+    vertical_room = max(0, usable_height - height)
+    x = right - width + 1
+    y = bottom - height + 1
+    if horizontal_room:
+        x -= offset % (horizontal_room + 1)
+    if vertical_room:
+        y -= offset % (vertical_room + 1)
+    return QRect(int(x), int(y), int(width), int(height))
+
+
+def recover_pinned_log_rect(
+    frame_rect: QRect,
+    minimum_size: QSize,
+    available_geometries: tuple[QRect, ...],
+    fallback: QRect,
+    visible_strip: int = 32,
+) -> QRect:
+    """Keep reachable geometry unchanged; clamp only inaccessible windows."""
+    frame = QRect(frame_rect)
+    strip = max(1, int(visible_strip))
+    for available in available_geometries:
+        intersection = frame.intersected(available)
+        if intersection.width() >= strip and intersection.height() >= strip:
+            return frame
+
+    width = min(
+        max(min(max(1, minimum_size.width()), fallback.width()), frame.width()),
+        fallback.width(),
+    )
+    height = min(
+        max(min(max(1, minimum_size.height()), fallback.height()), frame.height()),
+        fallback.height(),
+    )
+    x = min(
+        max(frame.x(), fallback.left()),
+        fallback.right() - width + 1,
+    )
+    y = min(
+        max(frame.y(), fallback.top()),
+        fallback.bottom() - height + 1,
+    )
+    return QRect(int(x), int(y), int(width), int(height))
+
+
 def compute_pinned_log_rects(
     count: int,
     requested_size: QSize,
@@ -157,15 +313,7 @@ def compute_pinned_log_rects(
     if count == 0:
         return ()
 
-    left = available.left() + PINNED_MARGIN
-    right = available.right() - PINNED_MARGIN
-    top = available.top() + PINNED_MARGIN
-    bottom = min(
-        available.bottom() - PINNED_MARGIN,
-        tray_rect.top() - PINNED_GAP - 1,
-    )
-    if bottom < top:
-        bottom = available.bottom() - PINNED_MARGIN
+    left, right, top, bottom = _pinned_bounds(tray_rect, available)
 
     available_width = max(1, right - left + 1)
     available_height = max(PANEL_EMERGENCY_MIN_HEIGHT, bottom - top + 1)
@@ -387,5 +535,7 @@ class PinnedLogManager(QObject):
 __all__ = [
     "MultiLogReader",
     "PinnedLogManager",
+    "compute_initial_pinned_log_rect",
     "compute_pinned_log_rects",
+    "recover_pinned_log_rect",
 ]

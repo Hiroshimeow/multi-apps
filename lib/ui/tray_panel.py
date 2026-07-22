@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 )
 
 PANEL_MARGIN = 12
+PANEL_RIGHT_MARGIN = 0
 PANEL_ANCHOR_GAP = 8
 
 
@@ -23,7 +24,7 @@ def compute_tray_panel_rect(
     """Place a tray panel above its tray icon and clamp it to the screen."""
     width = min(
         max(1, requested_size.width()),
-        max(1, available_geometry.width() - 2 * PANEL_MARGIN),
+        max(1, available_geometry.width() - PANEL_MARGIN - PANEL_RIGHT_MARGIN),
     )
     height = min(
         max(1, requested_size.height()),
@@ -31,12 +32,11 @@ def compute_tray_panel_rect(
     )
 
     left_limit = available_geometry.left() + PANEL_MARGIN
-    right_limit = available_geometry.right() - PANEL_MARGIN
+    right_limit = available_geometry.right() - PANEL_RIGHT_MARGIN
     top_limit = available_geometry.top() + PANEL_MARGIN
     bottom_limit = available_geometry.bottom() - PANEL_MARGIN
 
-    x = anchor_rect.right() - width + 1
-    x = min(max(x, left_limit), max(left_limit, right_limit - width + 1))
+    x = max(left_limit, right_limit - width + 1)
 
     y = anchor_rect.top() - PANEL_ANCHOR_GAP - height
     if y < top_limit:
@@ -177,6 +177,7 @@ class TrayPanelWindow(QFrame):
 __all__ = [
     "PANEL_ANCHOR_GAP",
     "PANEL_MARGIN",
+    "PANEL_RIGHT_MARGIN",
     "TrayActionButton",
     "TrayPanelWindow",
     "compute_tray_panel_rect",
