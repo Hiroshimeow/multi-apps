@@ -92,13 +92,8 @@ class IndependentLogLifecycleStressTests(unittest.TestCase):
     def tearDown(self):
         tray = getattr(self, "tray", None)
         if tray is not None:
-            tray.auto_start_timer.stop()
-            tray.log_controller.shutdown()
-            for row in tuple(tray.row_widgets):
-                row.shutdown()
-            tray.log_popup.hide()
+            tray.shutdown_ui()
             tray.log_popup.deleteLater()
-            tray.tray_panel.hide()
             tray.tray_panel.deleteLater()
             tray.hide()
             tray.deleteLater()

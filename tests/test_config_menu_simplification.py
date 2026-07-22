@@ -102,9 +102,7 @@ class TrayPanelActionTests(unittest.TestCase):
                 tray.open_config_action.click()
                 service.open_file.assert_called_once_with(str(config_path.resolve()))
             finally:
-                tray.log_controller.shutdown()
-                for row in tray.row_widgets:
-                    row.shutdown()
+                tray.shutdown_ui()
                 tray.log_popup.deleteLater()
                 tray.tray_panel.deleteLater()
                 tray.deleteLater()

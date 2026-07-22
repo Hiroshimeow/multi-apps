@@ -341,7 +341,7 @@ class PinnedLogManager(QObject):
         if session is None or request_id != session.latest_read_id:
             return
         reset_bottom = session.request_reset_bottom.pop(request_id, False)
-        session.window.panel.update_snapshot(snapshot, reset_bottom=reset_bottom)
+        session.window.panel.queue_snapshot(snapshot, reset_bottom=reset_bottom)
 
     def reposition_all(self):
         if not self.sessions:

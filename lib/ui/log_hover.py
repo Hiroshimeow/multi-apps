@@ -266,7 +266,7 @@ class LogHoverController(QObject):
         ):
             return
         reset_bottom = self._request_reset_bottom.pop(request_id, False)
-        self.panel.update_snapshot(snapshot, reset_bottom=reset_bottom)
+        self.panel.queue_snapshot(snapshot, reset_bottom=reset_bottom)
 
     def _pin_changed(self, pinned):
         if self.current_target is None or self.current_stream is None:

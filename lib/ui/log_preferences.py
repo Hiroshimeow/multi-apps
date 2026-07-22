@@ -79,6 +79,9 @@ class LogPanelPreferenceStore:
         apps, _readable = self._read_apps()
         return apps
 
+    def load_all(self) -> dict[str, LogPanelPreference]:
+        return self._load_apps()
+
     def load(self, app_id: str) -> LogPanelPreference:
         return self._load_apps().get(str(app_id), LogPanelPreference())
 
@@ -91,9 +94,16 @@ class LogPanelPreferenceStore:
         if apps.get(app_id, LogPanelPreference()) == normalized:
             return False
         apps[app_id] = normalized
+        return self.replace_all(apps)
+
+    def replace_all(self, apps) -> bool:
+        normalized_apps = {
+            str(app_id): _normalize_preference(preference)
+            for app_id, preference in dict(apps).items()
+        }
         payload = {
             "version": _SCHEMA_VERSION,
-            "apps": {key: asdict(value) for key, value in apps.items()},
+            "apps": {key: asdict(value) for key, value in normalized_apps.items()},
         }
         temporary = self.path.with_name(self.path.name + ".tmp")
         try:

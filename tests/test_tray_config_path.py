@@ -51,13 +51,8 @@ class LauncherConfigPathTests(unittest.TestCase):
 
     @staticmethod
     def _dispose_tray(tray: SystemTrayApp):
-        tray.auto_start_timer.stop()
-        tray.log_controller.shutdown()
-        for row in tuple(tray.row_widgets):
-            row.shutdown()
-        tray.log_popup.hide()
+        tray.shutdown_ui()
         tray.log_popup.deleteLater()
-        tray.tray_panel.hide()
         tray.tray_panel.deleteLater()
         tray.hide()
         tray.deleteLater()
@@ -182,6 +177,7 @@ class LauncherConfigPathTests(unittest.TestCase):
                 self.assertEqual(panel.line_count.value(), 5000)
                 self.assertEqual(panel.filter_edit.text(), "[alpha,!drop-me]")
                 self.assertEqual(panel.stream_label.text(), "stderr")
+                self.assertTrue(tray.log_preference_owner.flush(timeout=1))
                 self.assertEqual(
                     LogPanelPreferenceStore(preference_path).load("before"),
                     LogPanelPreference(5000, "[alpha,!drop-me]", "stderr"),

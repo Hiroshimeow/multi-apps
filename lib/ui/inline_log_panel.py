@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
-from PyQt6.QtCore import Qt, pyqtSignal
+import weakref
+from PyQt6 import sip
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QFrame,
@@ -18,7 +21,6 @@ from PyQt6.QtWidgets import (
 
 from .log_filter import (
     FILTER_WARNING_STANDALONE_BANG,
-    LogFilterResultState,
     apply_log_filter,
     parse_filter_expression,
 )
@@ -67,6 +69,14 @@ class LogRangeHighlighter(QSyntaxHighlighter):
     def set_ranges(self, ranges_by_block):
         self.ranges_by_block = tuple(tuple(ranges) for ranges in ranges_by_block)
         self.rehighlight()
+
+    def update_ranges_for_append(self, ranges_by_block, changed_blocks):
+        self.ranges_by_block = tuple(tuple(ranges) for ranges in ranges_by_block)
+        document = self.document()
+        for block_number in sorted(set(changed_blocks)):
+            block = document.findBlockByNumber(int(block_number))
+            if block.isValid():
+                self.rehighlightBlock(block)
 
     def highlightBlock(self, _text):
         block_number = self.currentBlock().blockNumber()
@@ -120,6 +130,48 @@ class _AppendLineMapping:
         return new_index
 
 
+class _RenderDispatcher:
+    _queue = deque()
+    _queued_ids = set()
+    _scheduled = False
+
+    @classmethod
+    def schedule(cls, panel):
+        key = id(panel)
+        if key in cls._queued_ids:
+            return
+        cls._queued_ids.add(key)
+        cls._queue.append(
+            (
+                key,
+                weakref.ref(
+                    panel,
+                    lambda _reference, selected=key: cls._queued_ids.discard(
+                        selected
+                    ),
+                ),
+            )
+        )
+        if not cls._scheduled:
+            cls._scheduled = True
+            QTimer.singleShot(0, cls._drain_one)
+
+    @classmethod
+    def _drain_one(cls):
+        cls._scheduled = False
+        while cls._queue:
+            key, reference = cls._queue.popleft()
+            cls._queued_ids.discard(key)
+            panel = reference()
+            if panel is None or sip.isdeleted(panel):
+                continue
+            panel._render_pending_snapshot()
+            break
+        if cls._queue and not cls._scheduled:
+            cls._scheduled = True
+            QTimer.singleShot(1, cls._drain_one)
+
+
 class InlineLogPanel(QFrame):
     pointer_entered = pyqtSignal()
     pointer_left = pyqtSignal()
@@ -138,10 +190,14 @@ class InlineLogPanel(QFrame):
 
         self._snapshot: LogSnapshot | None = None
         self._display_lines: tuple[str, ...] = ()
+        self._display_source_indices: tuple[int, ...] = ()
+        self._filter_expression: str | None = None
         self._display_signature = None
         self._primary_state = "Log file missing"
         self._suppress_control_signals = False
         self._suppress_pin_signal = False
+        self._pending_render = None
+        self._render_scheduled = False
 
         panel_layout = QVBoxLayout(self)
         panel_layout.setContentsMargins(
@@ -259,9 +315,12 @@ class InlineLogPanel(QFrame):
         self._validate_stream(stream)
         if self.stream_label.text() != stream:
             self.stream_label.setText(stream)
+            self._pending_render = None
             self._snapshot = None
             self._display_signature = None
             self._display_lines = ()
+            self._display_source_indices = ()
+            self._filter_expression = None
             self.highlighter.set_ranges(())
             self.log_view.clear()
 
@@ -269,8 +328,10 @@ class InlineLogPanel(QFrame):
         """Switch target metadata without repainting the document twice."""
         self._validate_stream(stream)
         self.stream_label.setText(stream)
+        self._pending_render = None
         self._snapshot = None
         self._display_signature = None
+        self._filter_expression = None
         self._set_primary_state("Loading?", "Reading newest log snapshot")
 
     def configure_controls(self, *, line_count, filter_expression, stream):
@@ -284,12 +345,38 @@ class InlineLogPanel(QFrame):
         self.prepare_stream(stream)
 
     def reset(self):
+        self._pending_render = None
         self._snapshot = None
         self._display_signature = None
         self._display_lines = ()
+        self._display_source_indices = ()
+        self._filter_expression = None
         self.highlighter.set_ranges(())
         self.log_view.clear()
         self._set_primary_state("Log file missing", "")
+
+    def queue_snapshot(self, snapshot, *, reset_bottom=False, force=False):
+        self._pending_render = (snapshot, bool(reset_bottom), bool(force))
+        if self._render_scheduled:
+            return
+        self._render_scheduled = True
+        _RenderDispatcher.schedule(self)
+
+    def _render_pending_snapshot(self):
+        self._render_scheduled = False
+        pending = self._pending_render
+        self._pending_render = None
+        if pending is None:
+            return
+        snapshot, reset_bottom, force = pending
+        self.update_snapshot(
+            snapshot,
+            reset_bottom=reset_bottom,
+            force=force,
+        )
+        if self._pending_render is not None and not self._render_scheduled:
+            self._render_scheduled = True
+            _RenderDispatcher.schedule(self)
 
     def _on_filter_text_changed(self, _text):
         if not self._suppress_control_signals:
@@ -449,6 +536,89 @@ class InlineLogPanel(QFrame):
             self.log_view.setFocus(Qt.FocusReason.OtherFocusReason)
         return True
 
+    def _apply_incremental_append(self, display_lines, ranges, mapping):
+        old_lines = self._display_lines
+        if mapping.overlap_length <= 0:
+            return False
+        if mapping.dropped_prefix + mapping.overlap_length != len(old_lines):
+            return False
+        if old_lines[mapping.dropped_prefix :] != display_lines[: mapping.overlap_length]:
+            return False
+
+        document = self.log_view.document()
+        cursor = QTextCursor(document)
+        if mapping.dropped_prefix:
+            first_kept = document.findBlockByNumber(mapping.dropped_prefix)
+            if not first_kept.isValid():
+                return False
+            cursor.setPosition(0)
+            cursor.setPosition(
+                first_kept.position(),
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+            cursor.removeSelectedText()
+
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        for line in display_lines[mapping.overlap_length :]:
+            cursor.insertBlock()
+            cursor.insertText(line)
+
+        changed_blocks = list(range(mapping.overlap_length, len(display_lines)))
+        if mapping.dropped_prefix:
+            changed_blocks.append(0)
+        self.highlighter.update_ranges_for_append(ranges, changed_blocks)
+        return True
+
+    def _incremental_filtered_display(self, previous, snapshot, spec):
+        if (
+            previous is None
+            or previous.state != LogSnapshotState.READY
+            or snapshot.state != LogSnapshotState.READY
+            or self._filter_expression != self.filter_edit.text()
+            or len(self._display_source_indices) != len(self._display_lines)
+        ):
+            return None
+
+        mapping = self._append_line_mapping(previous.lines, snapshot.lines)
+        if mapping.overlap_length <= 0:
+            return None
+        if mapping.dropped_prefix + mapping.overlap_length != len(previous.lines):
+            return None
+
+        retained_lines = []
+        retained_ranges = []
+        retained_indices = []
+        for line, highlights, source_index in zip(
+            self._display_lines,
+            self.highlighter.ranges_by_block,
+            self._display_source_indices,
+        ):
+            if source_index < mapping.dropped_prefix:
+                continue
+            new_index = source_index - mapping.dropped_prefix
+            if (
+                new_index >= mapping.overlap_length
+                or snapshot.lines[new_index] != line
+            ):
+                return None
+            retained_lines.append(line)
+            retained_ranges.append(highlights)
+            retained_indices.append(new_index)
+
+        suffix = snapshot.lines[mapping.overlap_length :]
+        filtered_suffix = apply_log_filter(suffix, spec)
+        retained_lines.extend(item.text for item in filtered_suffix.lines)
+        retained_ranges.extend(item.highlights for item in filtered_suffix.lines)
+        retained_indices.extend(
+            mapping.overlap_length + item.source_index
+            for item in filtered_suffix.lines
+        )
+        return (
+            tuple(retained_lines),
+            tuple(retained_ranges),
+            tuple(retained_indices),
+        )
+
     def _state_tooltip(self, snapshot, warning):
         details = []
         if snapshot.state == LogSnapshotState.UNREADABLE and snapshot.error:
@@ -465,21 +635,33 @@ class InlineLogPanel(QFrame):
         spec = parse_filter_expression(self.filter_edit.text())
         warning = FILTER_WARNING_STANDALONE_BANG in spec.warnings
 
-        filtered = None
         if snapshot.state == LogSnapshotState.READY:
-            filtered = apply_log_filter(snapshot.lines, spec)
-            display_lines = tuple(item.text for item in filtered.lines)
-            ranges = tuple(item.highlights for item in filtered.lines)
-            if filtered.state == LogFilterResultState.FULLY_FILTERED:
-                primary = "All lines filtered"
+            if not spec.positive_terms and not spec.exclusion_terms:
+                display_lines = tuple(snapshot.lines)
+                ranges = ((),) * len(display_lines)
+                source_indices = tuple(range(len(display_lines)))
             else:
-                primary = "Live"
+                incremental_filter = (
+                    None
+                    if force or change_kind != LogChangeKind.APPENDED
+                    else self._incremental_filtered_display(previous, snapshot, spec)
+                )
+                if incremental_filter is None:
+                    filtered = apply_log_filter(snapshot.lines, spec)
+                    display_lines = tuple(item.text for item in filtered.lines)
+                    ranges = tuple(item.highlights for item in filtered.lines)
+                    source_indices = tuple(
+                        item.source_index for item in filtered.lines
+                    )
+                else:
+                    display_lines, ranges, source_indices = incremental_filter
+            primary = "Live" if display_lines else "All lines filtered"
         elif snapshot.state == LogSnapshotState.MISSING:
-            display_lines, ranges, primary = (), (), "Log file missing"
+            display_lines, ranges, source_indices, primary = (), (), (), "Log file missing"
         elif snapshot.state == LogSnapshotState.EMPTY:
-            display_lines, ranges, primary = (), (), "Log is empty"
+            display_lines, ranges, source_indices, primary = (), (), (), "Log is empty"
         else:
-            display_lines, ranges, primary = (), (), "Cannot read log"
+            display_lines, ranges, source_indices, primary = (), (), (), "Cannot read log"
 
         signature = (
             snapshot.state,
@@ -494,6 +676,8 @@ class InlineLogPanel(QFrame):
         self._snapshot = snapshot
 
         if not force and signature == self._display_signature:
+            self._display_source_indices = source_indices
+            self._filter_expression = self.filter_edit.text()
             self._set_primary_state(
                 primary if primary != "Live" or self._at_bottom() else "Live paused while scrolled",
                 tooltip,
@@ -506,16 +690,24 @@ class InlineLogPanel(QFrame):
         cursor_state = None
         scroll_anchor = None
         append_mapping = None
-        compatible_append = change_kind == LogChangeKind.APPENDED
+        compatible_append = not force and change_kind == LogChangeKind.APPENDED
         if compatible_append:
             cursor_state = self._capture_cursor_state()
             append_mapping = self._append_line_mapping(old_display_lines, display_lines)
             if not at_bottom:
                 scroll_anchor = self._capture_scroll_anchor()
 
-        self.log_view.setPlainText("\n".join(display_lines))
+        incremental = (
+            compatible_append
+            and append_mapping is not None
+            and self._apply_incremental_append(display_lines, ranges, append_mapping)
+        )
+        if not incremental:
+            self.log_view.setPlainText("\n".join(display_lines))
+            self.highlighter.set_ranges(ranges)
         self._display_lines = display_lines
-        self.highlighter.set_ranges(ranges)
+        self._display_source_indices = source_indices
+        self._filter_expression = self.filter_edit.text()
         self._display_signature = signature
 
         if compatible_append and cursor_state is not None and append_mapping is not None:

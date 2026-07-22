@@ -30,6 +30,7 @@ from lib.runtime.single_instance import SingleInstanceLock
 from lib.ui.app_context_popup import AppContextPopup
 from lib.ui.app_tools import AppToolService
 from lib.ui.app_row import AppControlWidget, AppNameLabel, HoverLogButton
+from lib.ui.log_preference_owner import LogPreferenceOwner
 from lib.ui.log_preferences import (
     LogPanelPreferenceStore,
     default_log_preferences_path,
@@ -417,6 +418,7 @@ class SystemTrayApp(QSystemTrayIcon):
             else default_log_preferences_path(self.config_path)
         )
         self.log_preference_store = LogPanelPreferenceStore(preference_path)
+        self.log_preference_owner = LogPreferenceOwner(self.log_preference_store)
         if launcher_argv is None:
             parsed = parse_launcher_args(sys.argv)
             launcher_argv = (
@@ -441,13 +443,13 @@ class SystemTrayApp(QSystemTrayIcon):
         self.app_context_popup = AppContextPopup()
         self.lifecycle_controller = LifecycleCommandController(parent=self)
         self.pinned_logs = PinnedLogManager(
-            self.log_preference_store,
+            self.log_preference_owner,
             placement_provider=self._pinned_log_placement,
             parent=self,
         )
         self.log_controller = LogHoverController(
             self.log_popup,
-            self.log_preference_store,
+            self.log_preference_owner,
             placement_provider=self._log_popup_placement,
             pin_handler=self._handle_log_pin,
             is_pinned=self.pinned_logs.is_pinned,
@@ -819,6 +821,9 @@ class SystemTrayApp(QSystemTrayIcon):
         pinned = getattr(self, "pinned_logs", None)
         if pinned is not None:
             pinned.shutdown()
+        preferences = getattr(self, "log_preference_owner", None)
+        if preferences is not None:
+            preferences.shutdown()
         context = getattr(self, "app_context_popup", None)
         if context is not None:
             context.hide()
