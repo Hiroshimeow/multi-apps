@@ -328,31 +328,20 @@ class RecoveredUiStateTests(unittest.TestCase):
                 menu.deleteLater()
                 self._flush_deferred_deletes()
 
-    def test_widget_shutdown_stops_timer_closes_context_menu_and_is_idempotent(self):
+    def test_widget_shutdown_stops_timer_and_is_idempotent(self):
         menu = QMenu()
         widget = AppControlWidget(
             self._manager({"status": "STOPPED", "instances": 0}),
             menu,
         )
-        context = QMenu(widget)
-        context.addAction("Action")
-        widget._app_context_menu = context
-        context.aboutToHide.connect(
-            lambda current=context: widget._release_app_context_menu(current)
-        )
-        context.popup(QPoint(50, 50))
-        QApplication.processEvents()
         self.assertTrue(widget.timer.isActive())
-        self.assertTrue(context.isVisible())
 
         widget.shutdown()
         widget.shutdown()
         QApplication.processEvents()
 
         self.assertFalse(widget.timer.isActive())
-        self.assertIsNone(widget._app_context_menu)
-        with self.assertRaises(RuntimeError):
-            context.isVisible()
+        self.assertFalse(hasattr(widget, "_app_context_menu"))
         widget.deleteLater()
         menu.deleteLater()
         self._flush_deferred_deletes()
@@ -405,7 +394,7 @@ class RecoveredUiStateTests(unittest.TestCase):
                 self.assertEqual(len(coordinators), 1)
                 self.assertIs(coordinators[0], tray.log_coordinator)
                 self.assertEqual(sum(row.timer.isActive() for row in rows), 11)
-                self.assertEqual(len(timers), 13)
+                self.assertEqual(len(timers), 14)
                 self.assertIsNotNone(tray.log_coordinator.refresh_timer)
                 self.assertIsNotNone(tray.log_coordinator.hide_timer)
             finally:
@@ -654,7 +643,7 @@ class RecoveredUiStateTests(unittest.TestCase):
             menu.deleteLater()
             QApplication.processEvents()
 
-    def test_open_panel_invalidates_widget_action_and_menu_geometry(self):
+    def test_open_panel_expands_top_action_without_resizing_app_row(self):
         manager = self._manager({"status": "STOPPED", "instances": 0})
         menu = QMenu()
         tray = SimpleNamespace(
@@ -668,24 +657,32 @@ class RecoveredUiStateTests(unittest.TestCase):
         )
         try:
             SystemTrayApp.refresh_menu(tray)
+            row = menu.findChild(AppControlWidget)
             row_action = next(
                 action
                 for action in menu.actions()
                 if isinstance(action, QWidgetAction)
+                and action.defaultWidget() is row
             )
-            row = row_action.defaultWidget()
+            panel_action = tray.log_panel_action
+            self.assertLess(
+                menu.actions().index(panel_action),
+                menu.actions().index(row_action),
+            )
             menu.popup(QPoint(100, 100))
             QApplication.processEvents()
-            initial_action_height = menu.actionGeometry(row_action).height()
+            initial_row_height = menu.actionGeometry(row_action).height()
             initial_menu_height = menu.height()
 
             tray.log_coordinator.request_open(row, "stdout")
             QApplication.processEvents()
 
             self.assertTrue(row.inline_log_panel.isVisible())
-            self.assertGreater(
+            self.assertTrue(panel_action.isVisible())
+            self.assertGreater(menu.actionGeometry(panel_action).height(), 90)
+            self.assertEqual(
                 menu.actionGeometry(row_action).height(),
-                initial_action_height + 90,
+                initial_row_height,
             )
             self.assertGreater(menu.height(), initial_menu_height)
         finally:
@@ -696,7 +693,7 @@ class RecoveredUiStateTests(unittest.TestCase):
             menu.deleteLater()
             QApplication.processEvents()
 
-    def test_open_panel_keeps_visible_menu_origin_stable(self):
+    def test_open_top_panel_keeps_bottom_edge_and_expands_upward(self):
         manager = self._manager({"status": "STOPPED", "instances": 0})
         menu = QMenu()
         tray = SimpleNamespace(
@@ -712,21 +709,36 @@ class RecoveredUiStateTests(unittest.TestCase):
             SystemTrayApp.refresh_menu(tray)
             row = menu.findChild(AppControlWidget)
             available = QApplication.primaryScreen().availableGeometry()
-            menu.popup(QPoint(100, available.bottom() - 20))
+            menu.popup(QPoint(100, 100))
+            QApplication.processEvents()
+            natural = menu.frameGeometry()
+            initial_geometry = QRect(
+                natural.x(),
+                available.bottom() - natural.height() - 11,
+                natural.width(),
+                natural.height(),
+            )
+            menu.setGeometry(initial_geometry)
             QApplication.processEvents()
             initial_geometry = menu.frameGeometry()
-            initial_origin = initial_geometry.topLeft()
 
             tray.log_coordinator.request_open(row, "stdout")
             QApplication.processEvents()
 
+            opened = menu.frameGeometry()
             self.assertTrue(row.inline_log_panel.isVisible())
-            self.assertEqual(menu.frameGeometry().topLeft(), initial_origin)
+            self.assertEqual(opened.bottom(), initial_geometry.bottom())
+            self.assertLess(opened.top(), initial_geometry.top())
+            self.assertGreaterEqual(opened.top(), available.top())
+            self.assertLessEqual(opened.bottom(), available.bottom())
+            self.assertLessEqual(
+                menu.actionGeometry(menu.actions()[-1]).bottom(),
+                opened.height(),
+            )
 
             tray.log_coordinator.hide_current()
             QApplication.processEvents()
 
-            self.assertEqual(menu.frameGeometry().topLeft(), initial_origin)
             self.assertEqual(menu.frameGeometry(), initial_geometry)
         finally:
             tray.log_coordinator.shutdown()
@@ -777,8 +789,10 @@ class RecoveredUiStateTests(unittest.TestCase):
             tray.log_coordinator.request_open(row, "stdout")
             QApplication.processEvents()
 
-            self.assertEqual(menu.frameGeometry().topLeft(), initial_geometry.topLeft())
-            self.assertLess(menu.frameGeometry().height(), initial_geometry.height())
+            opened = menu.frameGeometry()
+            self.assertGreaterEqual(opened.top(), available.top())
+            self.assertLessEqual(opened.bottom(), available.bottom())
+            self.assertLess(opened.top(), initial_geometry.top())
 
             tray.log_coordinator.hide_current()
             QApplication.processEvents()
@@ -792,7 +806,7 @@ class RecoveredUiStateTests(unittest.TestCase):
             menu.deleteLater()
             QApplication.processEvents()
 
-    def test_open_panel_invalidates_widget_action_with_eleven_rows(self):
+    def test_top_panel_stays_above_eleven_fixed_height_rows(self):
         managers = [
             self._manager(
                 {"status": "STOPPED", "instances": 0},
@@ -823,6 +837,7 @@ class RecoveredUiStateTests(unittest.TestCase):
                 if isinstance(action, QWidgetAction)
                 and action.defaultWidget() is row
             )
+            panel_action = tray.log_panel_action
             menu.popup(QPoint(100, 100))
             QApplication.processEvents()
             initial_height = menu.actionGeometry(row_action).height()
@@ -831,13 +846,11 @@ class RecoveredUiStateTests(unittest.TestCase):
             QApplication.processEvents()
 
             self.assertTrue(row.inline_log_panel.isVisible())
-            self.assertGreater(
-                menu.actionGeometry(row_action).height(),
-                initial_height + 90,
-            )
-            self.assertEqual(
-                menu.actionGeometry(row_action).height(),
-                row.height(),
+            self.assertGreater(menu.actionGeometry(panel_action).height(), 90)
+            self.assertEqual(menu.actionGeometry(row_action).height(), initial_height)
+            self.assertLess(
+                menu.actions().index(panel_action),
+                menu.actions().index(row_action),
             )
         finally:
             tray.log_coordinator.shutdown()
@@ -916,12 +929,7 @@ class RecoveredUiStateTests(unittest.TestCase):
         )
         try:
             SystemTrayApp.refresh_menu(tray)
-            row_action = next(
-                action
-                for action in menu.actions()
-                if hasattr(action, "defaultWidget") and action.defaultWidget() is not None
-            )
-            row_widget = row_action.defaultWidget()
+            row_widget = menu.findChild(AppControlWidget)
             self.assertGreaterEqual(
                 menu.minimumWidth(),
                 row_widget.minimumWidth() + 8,

@@ -10,11 +10,13 @@ SAMPLE = ROOT / "setting.yaml.sample"
 
 
 class PublicDocumentationContractTests(unittest.TestCase):
-    def test_readme_documents_app_tools_inline_logs_and_preferences(self):
+    def test_readme_documents_tray_config_top_logs_and_preferences(self):
         text = README.read_text(encoding="utf-8")
 
         for required in (
-            "## App tools và thao tác trên tên app",
+            "Open Config",
+            "nhấp trái tên app",
+            "phía trên danh sách app",
             "## Inline live logs",
             "[alpha,beta,!drop-me]",
             "Live paused while scrolled",
@@ -25,7 +27,11 @@ class PublicDocumentationContractTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, text)
 
-    def test_sample_explicitly_declares_tools_for_every_app(self):
+        for removed in ("Open terminal here", "## App tools", "`tools`"):
+            with self.subTest(removed=removed):
+                self.assertNotIn(removed, text)
+
+    def test_sample_declares_only_supported_app_fields(self):
         payload = yaml.safe_load(SAMPLE.read_text(encoding="utf-8"))
         apps = payload["apps"]
         required_fields = {
@@ -40,27 +46,13 @@ class PublicDocumentationContractTests(unittest.TestCase):
             "args_edit",
             "close_timeout",
             "os",
-            "tools",
         }
 
         self.assertEqual(len(apps), 11)
         for app in apps:
             with self.subTest(app=app["id"]):
                 self.assertEqual(required_fields - set(app), set())
-                self.assertIsInstance(app["tools"], list)
-
-        configured = [tool for app in apps for tool in app["tools"]]
-        self.assertEqual(
-            configured,
-            [
-                {
-                    "id": "open-launcher-readme",
-                    "type": "open_file",
-                    "label": "Open launcher README",
-                    "path": "README.md",
-                }
-            ],
-        )
+                self.assertNotIn("tools", app)
 
 
 if __name__ == "__main__":

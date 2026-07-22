@@ -23,7 +23,7 @@ from lib.ui.inline_log_panel import (
     REFRESH_INTERVAL_MS,
     compute_inline_menu_geometry,
 )
-from lib.ui.log_reader import LogSnapshot, LogSnapshotState
+from lib.ui.log_reader import DEFAULT_MAX_BYTES, LogSnapshot, LogSnapshotState
 
 
 _QT_APP = QApplication.instance() or QApplication([])
@@ -428,6 +428,80 @@ class InlineLogPanelCoordinatorTests(unittest.TestCase):
         self.assertIs(coordinator.current_row, row)
         self.assertEqual(coordinator.current_stream, "stdout")
         self.assertTrue(coordinator.refresh_timer.isActive())
+        coordinator.shutdown()
+
+    def test_switching_rows_and_streams_does_not_reemit_visibility(self):
+        first = self.make_row(
+            "one",
+            [ready_snapshot("one-out"), ready_snapshot("one-err")],
+        )
+        second = self.make_row(
+            "two",
+            [ready_snapshot("two-out"), ready_snapshot("two-err")],
+        )
+        coordinator = InlineLogPanelCoordinator(
+            refresh_interval_ms=1000,
+            hide_delay_ms=30,
+        )
+        visibility_changed = MagicMock()
+        coordinator.panel_visibility_changed.connect(visibility_changed)
+
+        coordinator.request_open(first, "stdout")
+        coordinator.request_open(second, "stdout")
+        coordinator.request_open(second, "stderr")
+        coordinator.request_open(first, "stderr")
+
+        self.assertEqual(
+            [call.args for call in visibility_changed.call_args_list],
+            [(True,)],
+        )
+        self.assertIs(coordinator.current_row, first)
+        self.assertEqual(coordinator.current_stream, "stderr")
+        coordinator.shutdown()
+
+    def test_hover_debounces_to_latest_log_target(self):
+        first = self.make_row("one", [ready_snapshot("first")])
+        second = self.make_row("two", [ready_snapshot("second")])
+        coordinator = InlineLogPanelCoordinator(
+            refresh_interval_ms=1000,
+            hide_delay_ms=30,
+            open_delay_ms=20,
+        )
+
+        coordinator.button_entered(first, "stdout")
+        self.assertIsNone(coordinator.current_row)
+        first.manager.get_log_snapshot.assert_not_called()
+        coordinator.button_left(first, "stdout")
+        coordinator.button_entered(second, "stderr")
+
+        QTest.qWait(35)
+        QApplication.processEvents()
+
+        first.manager.get_log_snapshot.assert_not_called()
+        second.manager.get_log_snapshot.assert_called_once_with(
+            "err",
+            max_lines=100,
+            max_bytes=DEFAULT_MAX_BYTES,
+        )
+        self.assertIs(coordinator.current_row, second)
+        self.assertEqual(coordinator.current_stream, "stderr")
+        coordinator.shutdown()
+
+    def test_hover_leave_before_open_delay_cancels_pending_open(self):
+        row = self.make_row("one", [ready_snapshot("unexpected")])
+        coordinator = InlineLogPanelCoordinator(
+            refresh_interval_ms=1000,
+            hide_delay_ms=30,
+            open_delay_ms=20,
+        )
+
+        coordinator.button_entered(row, "stdout")
+        coordinator.button_left(row, "stdout")
+        QTest.qWait(35)
+        QApplication.processEvents()
+
+        self.assertIsNone(coordinator.current_row)
+        row.manager.get_log_snapshot.assert_not_called()
         coordinator.shutdown()
 
     def test_delayed_hide_cancel_and_focus_keep_open(self):

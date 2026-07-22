@@ -45,8 +45,10 @@ PANEL_SPACING = 4
 FILTER_SOFT_MIN_WIDTH = 160
 REFRESH_INTERVAL_MS = 500
 HIDE_DELAY_MS = 300
+OPEN_DELAY_MS = 80
 DEFAULT_REFRESH_INTERVAL_MS = REFRESH_INTERVAL_MS
 DEFAULT_HIDE_DELAY_MS = HIDE_DELAY_MS
+DEFAULT_OPEN_DELAY_MS = OPEN_DELAY_MS
 
 _FILTER_TOOLTIP = (
     "Comma-separated literal terms; !term excludes; outer brackets are optional; "
@@ -607,6 +609,7 @@ class InlineLogPanelCoordinator(QObject):
         *,
         refresh_interval_ms=DEFAULT_REFRESH_INTERVAL_MS,
         hide_delay_ms=DEFAULT_HIDE_DELAY_MS,
+        open_delay_ms=DEFAULT_OPEN_DELAY_MS,
         generation=0,
     ):
         super().__init__(parent)
@@ -616,6 +619,8 @@ class InlineLogPanelCoordinator(QObject):
         self._active_generation = int(generation)
         self._button_hovered = False
         self._panel_hovered = False
+        self._pending_row = None
+        self._pending_stream = None
         self._registered_rows = set()
         self._row_callbacks = {}
         self._shutdown = False
@@ -627,6 +632,10 @@ class InlineLogPanelCoordinator(QObject):
         self.hide_timer.setSingleShot(True)
         self.hide_timer.setInterval(int(hide_delay_ms))
         self.hide_timer.timeout.connect(self._hide_if_unkept)
+        self.open_timer = QTimer(self)
+        self.open_timer.setSingleShot(True)
+        self.open_timer.setInterval(int(open_delay_ms))
+        self.open_timer.timeout.connect(self._open_pending)
         QApplication.instance().focusChanged.connect(self._focus_changed)
 
     def register_row(self, row):
@@ -657,6 +666,7 @@ class InlineLogPanelCoordinator(QObject):
             return
         self.register_row(row)
         self.hide_timer.stop()
+        panel_was_open = self.current_row is not None
         same_row = row is self.current_row
         same_stream = same_row and stream == self.current_stream
         if same_stream:
@@ -674,21 +684,51 @@ class InlineLogPanelCoordinator(QObject):
             row.inline_log_panel.set_stream(stream)
             self._persist_row(row)
         row.inline_log_panel.show()
-        self.panel_visibility_changed.emit(True)
+        if not panel_was_open:
+            self.panel_visibility_changed.emit(True)
         self.refresh_current(reset_bottom=not same_stream)
         self.refresh_timer.start()
 
     def button_entered(self, row, stream):
+        if self._shutdown:
+            return
         self._button_hovered = True
-        self.request_open(row, stream)
+        self.hide_timer.stop()
+        if row is self.current_row and stream == self.current_stream:
+            self.open_timer.stop()
+            self._pending_row = None
+            self._pending_stream = None
+            self.refresh_timer.start()
+            return
+        self._pending_row = row
+        self._pending_stream = stream
+        self.open_timer.start()
 
     def button_left(self, row, stream):
-        if row is self.current_row and stream == self.current_stream:
+        pending_match = row is self._pending_row and stream == self._pending_stream
+        current_match = row is self.current_row and stream == self.current_stream
+        if pending_match:
+            self.open_timer.stop()
+            self._pending_row = None
+            self._pending_stream = None
+        if pending_match or current_match:
             self._button_hovered = False
             self._schedule_hide()
 
+    def _open_pending(self):
+        row = self._pending_row
+        stream = self._pending_stream
+        self._pending_row = None
+        self._pending_stream = None
+        if self._shutdown or row is None or stream is None or not self._button_hovered:
+            return
+        self.request_open(row, stream)
+
     def panel_entered(self, row):
         if row is self.current_row:
+            self.open_timer.stop()
+            self._pending_row = None
+            self._pending_stream = None
             self._panel_hovered = True
             self.hide_timer.stop()
 
@@ -759,6 +799,9 @@ class InlineLogPanelCoordinator(QObject):
     def hide_current(self):
         self.refresh_timer.stop()
         self.hide_timer.stop()
+        self.open_timer.stop()
+        self._pending_row = None
+        self._pending_stream = None
         if self.current_row is not None:
             self.current_row.inline_log_panel.hide()
             self.panel_visibility_changed.emit(False)
@@ -804,9 +847,11 @@ class InlineLogPanelCoordinator(QObject):
 
 __all__ = [
     "DEFAULT_HIDE_DELAY_MS",
+    "DEFAULT_OPEN_DELAY_MS",
     "DEFAULT_REFRESH_INTERVAL_MS",
     "FILTER_SOFT_MIN_WIDTH",
     "HIDE_DELAY_MS",
+    "OPEN_DELAY_MS",
     "InlineLogPanel",
     "InlineLogPanelCoordinator",
     "InlineMenuGeometry",

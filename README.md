@@ -22,7 +22,7 @@ Khi launcher mở lại, nó đọc runtime registry và reconnect tới các su
 - thời điểm bắt đầu dùng để tính uptime;
 - đường dẫn stdout/stderr log.
 
-Tray hiển thị trạng thái đã khôi phục ngay khi khởi động, không cần bấm Refresh Menu.
+Tray hiển thị trạng thái đã khôi phục ngay khi khởi động, không cần thao tác reload thủ công.
 
 ### Stop và Stop All Apps
 
@@ -88,7 +88,6 @@ apps:
     args_edit: false
     close_timeout: 5.0
     os: "win11"
-    tools: []
 ```
 
 Lệnh thực tế:
@@ -113,7 +112,6 @@ uv run main.py --repo E:/python_project --port 8000
 | `args_edit` | `false` | Mở argument editor chỉ khi Start thủ công từ tray GUI. |
 | `close_timeout` | `5.0` giây | Thời gian graceful Stop trước khi force-close complete tree. Phải lớn hơn 0. |
 | `os` | mọi OS hỗ trợ | Lọc theo `win`, `windows`, `win10`, `win11`, `linux`, `ubuntu` hoặc `debian`. |
-| `tools` | `[]` | Các file mở nhanh trong menu chuột phải của app. Chỉ hỗ trợ `type: open_file`; không chạy shell command. |
 
 ### Các trường global
 
@@ -125,24 +123,13 @@ uv run main.py --repo E:/python_project --port 8000
 
 Các path tương đối được resolve từ thư mục chứa file config.
 
-## App tools và thao tác trên tên app
+## Thao tác trong tray
 
-Tên app trong tray có hai thao tác tách biệt:
+- nhấp trái tên app để mở working directory của app;
+- **Open Config** mở đúng file YAML mà launcher hiện tại đang dùng;
+- **Stop All Apps**, **Restart Launcher** và **Exit Launcher** giữ nguyên chức năng tương ứng.
 
-- nhấp trái mở working directory của app;
-- nhấp phải, phím Menu hoặc `Shift+F10` mở menu công cụ của riêng app.
-
-Menu luôn có **Open folder** và **Open terminal here**. Terminal được mở tại đúng working directory; launcher không đổi working directory toàn cục. Các mục bổ sung lấy từ `tools`:
-
-```yaml
-tools:
-  - id: "open-launcher-readme"
-    type: "open_file"
-    label: "Open launcher README"
-    path: "README.md"
-```
-
-`path` tương đối trong `tools` được resolve từ working directory của app. Hiện chỉ hỗ trợ `type: open_file`; launcher không cung cấp tool chạy shell command tùy ý. File hoặc terminal không khả dụng sẽ hiện disabled cùng tooltip giải thích, thay vì thử chạy mù.
+Tên app không có menu chuột phải riêng. Cấu hình dùng chung được mở từ menu tray thay vì khai báo lặp lại theo từng app.
 
 ### Cách viết `args`
 
@@ -215,7 +202,7 @@ Supervisor giữ log handles, vì vậy log tiếp tục được ghi khi launch
 
 ## Inline live logs
 
-Hover trên **O.Logs** hoặc **E.Logs** mở một panel log ngay dưới đúng app row; tại một thời điểm chỉ có một panel. Nhấp nút vẫn mở file log như trước. Panel cập nhật theo chu kỳ 500 ms và có các điều khiển:
+Hover trên **O.Logs** hoặc **E.Logs** mở một panel log cố định phía trên danh sách app; tại một thời điểm chỉ có một panel. Panel đổi sang app và stream đang hover, còn chiều cao từng app row không đổi. Menu mở rộng lên trên và giữ các action trong vùng làm việc của màn hình. Nhấp nút vẫn mở file log như trước. Panel cập nhật theo chu kỳ 500 ms và có các điều khiển:
 
 - stream `stdout` hoặc `stderr` theo nút đang hover;
 - **Lines** mặc định **100 dòng**, cho phép **10–5000**;

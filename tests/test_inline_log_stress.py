@@ -158,7 +158,7 @@ class InlineLogLifecycleStressTests(unittest.TestCase):
             timers = self.tray.menu.findChildren(QTimer)
             self.assertEqual(len(rows), 2)
             self.assertEqual(len(coordinators), 1)
-            self.assertEqual(len(timers), 4)
+            self.assertEqual(len(timers), 5)
             self.assertTrue(all(item.timer.isActive() for item in rows))
             self.assertTrue(self.tray.log_coordinator.refresh_timer.isActive())
 

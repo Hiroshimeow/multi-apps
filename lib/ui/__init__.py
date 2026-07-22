@@ -1,13 +1,6 @@
 """UI contracts and app-tool services used by launcher presentation layers."""
 
-from .app_tools import (
-    AppToolAction,
-    AppToolActionResult,
-    AppToolService,
-    SystemTerminalAdapter,
-    TerminalAdapter,
-    TerminalCommand,
-)
+from .app_tools import AppToolActionResult, AppToolService
 from .log_filter import (
     FILTER_WARNING_STANDALONE_BANG,
     FilteredLine,
@@ -58,12 +51,8 @@ from .inline_log_panel import (
 )
 
 __all__ = [
-    "AppToolAction",
     "AppToolActionResult",
     "AppToolService",
-    "SystemTerminalAdapter",
-    "TerminalAdapter",
-    "TerminalCommand",
     "FILTER_WARNING_STANDALONE_BANG",
     "FilteredLine",
     "HighlightRange",
