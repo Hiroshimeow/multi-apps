@@ -25,7 +25,7 @@ def _canonical_path(value: str | os.PathLike[str] | None) -> str | None:
 
 
 class AppToolService:
-    """Open launcher folders and files without changing process-wide cwd."""
+    """Open folders, files, and terminals without changing process-wide cwd."""
 
     def __init__(
         self,
@@ -111,6 +111,53 @@ class AppToolService:
             target=target,
         )
 
+    def _terminal_argv(self, workdir: str) -> tuple[str, ...]:
+        if self._platform_key == "windows":
+            resolved = self.which("wt.exe")
+            if resolved:
+                return (resolved, "-d", workdir)
+            for candidate in ("pwsh.exe", "powershell.exe"):
+                resolved = self.which(candidate)
+                if resolved:
+                    return (resolved, "-NoProfile", "-NoExit")
+            resolved = self.which("cmd.exe")
+            if resolved:
+                return (resolved, "/D", "/K")
+            return ()
+        if self._platform_key == "linux":
+            candidates = (
+                ("x-terminal-emulator", ()),
+                ("gnome-terminal", ("--working-directory", workdir)),
+                ("konsole", ("--workdir", workdir)),
+                ("xfce4-terminal", ("--working-directory", workdir)),
+                ("xterm", ()),
+            )
+            for candidate, suffix in candidates:
+                executable = self.which(candidate)
+                if executable:
+                    return (executable, *suffix)
+        return ()
+
+    def terminal_status(self, workdir: str | None) -> AppToolActionResult:
+        folder = self.folder_status(workdir)
+        if not folder.ok:
+            return folder
+        argv = self._terminal_argv(folder.target)
+        if not argv:
+            return AppToolActionResult(
+                False,
+                "TERMINAL_UNAVAILABLE",
+                "No supported terminal executable was found.",
+                target=folder.target,
+            )
+        return AppToolActionResult(
+            True,
+            "READY",
+            f"Open terminal in: {folder.target}",
+            target=folder.target,
+            argv=argv,
+        )
+
     def _open_target(self, target: str) -> AppToolActionResult:
         try:
             if self._platform_key == "windows":
@@ -167,3 +214,54 @@ class AppToolService:
         if not status.ok:
             return status
         return self._open_target(status.target)
+
+    def open_terminal(self, workdir: str | None) -> AppToolActionResult:
+        status = self.terminal_status(workdir)
+        if not status.ok:
+            return status
+        try:
+            executable = Path(status.argv[0]).name.casefold()
+            kwargs = {}
+            if self._platform_key == "windows":
+                if executable in {"pwsh.exe", "powershell.exe", "cmd.exe"}:
+                    kwargs["cwd"] = status.target
+                    kwargs["creationflags"] = getattr(
+                        subprocess,
+                        "CREATE_NEW_CONSOLE",
+                        0,
+                    )
+                else:
+                    kwargs.update(
+                        {
+                            "stdin": subprocess.DEVNULL,
+                            "stdout": subprocess.DEVNULL,
+                            "stderr": subprocess.DEVNULL,
+                        }
+                    )
+            else:
+                if executable in {"x-terminal-emulator", "xterm"}:
+                    kwargs["cwd"] = status.target
+                kwargs.update(
+                    {
+                        "stdin": subprocess.DEVNULL,
+                        "stdout": subprocess.DEVNULL,
+                        "stderr": subprocess.DEVNULL,
+                        "start_new_session": True,
+                    }
+                )
+            self.process_launcher(list(status.argv), **kwargs)
+            return AppToolActionResult(
+                True,
+                "TERMINAL_OPENED",
+                f"Opened terminal in: {status.target}",
+                target=status.target,
+                argv=status.argv,
+            )
+        except Exception as exc:
+            return AppToolActionResult(
+                False,
+                "LAUNCH_FAILED",
+                f"Failed to open terminal: {exc}",
+                target=status.target,
+                argv=status.argv,
+            )

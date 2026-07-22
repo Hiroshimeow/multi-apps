@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QPushButton,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
@@ -124,6 +125,7 @@ class InlineLogPanel(QFrame):
     pointer_left = pyqtSignal()
     filter_changed = pyqtSignal()
     line_count_changed = pyqtSignal(int)
+    pin_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,6 +141,7 @@ class InlineLogPanel(QFrame):
         self._display_signature = None
         self._primary_state = "Log file missing"
         self._suppress_control_signals = False
+        self._suppress_pin_signal = False
 
         panel_layout = QVBoxLayout(self)
         panel_layout.setContentsMargins(
@@ -155,6 +158,9 @@ class InlineLogPanel(QFrame):
         control_layout.setContentsMargins(0, 0, 0, 0)
         control_layout.setSpacing(PANEL_SPACING)
 
+        self.source_label = QLabel("", control_row)
+        self.source_label.setAccessibleName("Log source")
+        self.source_label.hide()
         self.stream_label = QLabel("stdout", control_row)
         self.stream_label.setAccessibleName("Log stream")
         self.filter_label = QLabel("Filter", control_row)
@@ -176,17 +182,23 @@ class InlineLogPanel(QFrame):
         self.lines_label.setBuddy(self.line_count)
         self.state_label = QLabel("Log file missing", control_row)
         self.state_label.setAccessibleName("Live log state")
+        self.pin_button = QPushButton("PIN", control_row)
+        self.pin_button.setAccessibleName("Pin live log")
+        self.pin_button.setCheckable(True)
+        self.pin_button.setToolTip("Keep this live log visible when the tray panel closes.")
         self.state_label.setSizePolicy(
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Fixed,
         )
 
+        control_layout.addWidget(self.source_label)
         control_layout.addWidget(self.stream_label)
         control_layout.addWidget(self.filter_label)
         control_layout.addWidget(self.filter_edit, 1)
         control_layout.addWidget(self.lines_label)
         control_layout.addWidget(self.line_count)
         control_layout.addWidget(self.state_label)
+        control_layout.addWidget(self.pin_button)
 
         self.log_view = QPlainTextEdit(self)
         self.log_view.setAccessibleName("Live log text")
@@ -204,6 +216,7 @@ class InlineLogPanel(QFrame):
 
         self.filter_edit.textChanged.connect(self._on_filter_text_changed)
         self.line_count.valueChanged.connect(self._on_line_count_changed)
+        self.pin_button.toggled.connect(self._on_pin_toggled)
         self.log_view.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         self.hide()
 
@@ -223,6 +236,24 @@ class InlineLogPanel(QFrame):
     def _validate_stream(stream):
         if stream not in {"stdout", "stderr"}:
             raise ValueError("stream must be stdout or stderr")
+
+    def set_source_name(self, name):
+        value = str(name or "").strip()
+        self.source_label.setText(value)
+        self.source_label.setVisible(bool(value))
+
+    def set_pin_state(self, pinned):
+        self._suppress_pin_signal = True
+        try:
+            self.pin_button.setChecked(bool(pinned))
+            self.pin_button.setText("UNPIN" if pinned else "PIN")
+        finally:
+            self._suppress_pin_signal = False
+
+    def _on_pin_toggled(self, pinned):
+        self.pin_button.setText("UNPIN" if pinned else "PIN")
+        if not self._suppress_pin_signal:
+            self.pin_changed.emit(bool(pinned))
 
     def set_stream(self, stream):
         self._validate_stream(stream)

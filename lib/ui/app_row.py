@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -17,11 +17,34 @@ class AppNameLabel(QLabel):
     """Clickable app label that opens the configured working directory."""
 
     left_clicked = pyqtSignal()
+    context_requested = pyqtSignal(QPoint)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.left_clicked.emit()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.RightButton:
+            self.context_requested.emit(event.globalPosition().toPoint())
+            event.accept()
+            return
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        is_menu_key = event.key() == Qt.Key.Key_Menu
+        is_shift_f10 = (
+            event.key() == Qt.Key.Key_F10
+            and bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        )
+        if is_menu_key or is_shift_f10:
+            self.context_requested.emit(self.mapToGlobal(self.rect().bottomLeft()))
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class HoverLogButton(QPushButton):
@@ -40,7 +63,9 @@ class HoverLogButton(QPushButton):
 
 
 class AppControlWidget(QWidget):
-    """One app row; live-log state is owned by the shared hover controller."""
+    """One app row; shared controllers own log and blocking lifecycle work."""
+
+    context_requested = pyqtSignal(object, object)
 
     def __init__(
         self,
@@ -48,11 +73,13 @@ class AppControlWidget(QWidget):
         parent=None,
         result_notifier=None,
         log_controller=None,
+        lifecycle_controller=None,
     ):
         super().__init__(parent)
         self.manager = manager
         self.result_notifier = result_notifier
         self.log_controller = log_controller
+        self.lifecycle_controller = lifecycle_controller
         self.log_target = LogTarget(manager.app_id, manager)
         self._shutdown = False
 
@@ -80,8 +107,11 @@ class AppControlWidget(QWidget):
         name_font.setBold(True)
         self.lbl_name.setFont(name_font)
         self.lbl_name.left_clicked.connect(self.on_name_clicked)
+        self.lbl_name.context_requested.connect(self._context_requested)
         self.lbl_name.setToolTip(
-            f"{manager.name}\nLeft-click to open the application working directory."
+            f"{manager.name}\n"
+            "Left-click to open the application working directory.\n"
+            "Right-click, Menu, or Shift+F10 to open app actions."
         )
         self.lbl_name.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -144,6 +174,9 @@ class AppControlWidget(QWidget):
             self.btn_elogs.hover_entered.connect(self._stderr_entered)
             self.btn_elogs.hover_left.connect(self._stderr_left)
 
+        if self.lifecycle_controller is not None:
+            self.lifecycle_controller.pending_changed.connect(self._pending_changed)
+
         root_layout.activate()
         self.setMinimumWidth(max(self.top_row.sizeHint().width(), 520))
 
@@ -164,11 +197,27 @@ class AppControlWidget(QWidget):
     def _stderr_left(self):
         self.log_controller.hover_leave(self.log_target, "stderr")
 
+    def _context_requested(self, global_pos):
+        self.context_requested.emit(self.manager, global_pos)
+
+    def _pending_changed(self, app_id, _pending):
+        if str(app_id) == str(self.manager.app_id):
+            self.update_ui()
+
     def shutdown(self):
         if self._shutdown:
             return
         self._shutdown = True
         self.timer.stop()
+        try:
+            self.lbl_name.context_requested.disconnect(self._context_requested)
+        except (TypeError, RuntimeError):
+            pass
+        if self.lifecycle_controller is not None:
+            try:
+                self.lifecycle_controller.pending_changed.disconnect(self._pending_changed)
+            except (TypeError, RuntimeError):
+                pass
         if self.log_controller is not None:
             for signal, callback in (
                 (self.btn_ologs.hover_entered, self._stdout_entered),
@@ -199,16 +248,29 @@ class AppControlWidget(QWidget):
         self.lbl_pid.setToolTip(pid_presentation["tooltip"])
 
         multi_run = self.manager.app_config.get("multi_run", False)
+        lifecycle_controller = getattr(self, "lifecycle_controller", None)
+        pending = (
+            lifecycle_controller is not None
+            and lifecycle_controller.is_pending(self.manager.app_id)
+        )
+        if pending:
+            self.lbl_status.setText("Stopping...")
+            self.lbl_status.setStyleSheet("color: #c58b00;")
+            self.lbl_status.setToolTip("Stop request is running in the background")
         controllable = status in {"STARTING", "RUNNING", "STOPPING"}
-        self.btn_stop.setEnabled(controllable)
-        self.btn_start.setEnabled(status == "STOPPED" or multi_run)
+        self.btn_stop.setEnabled(controllable and not pending)
+        self.btn_start.setEnabled((status == "STOPPED" or multi_run) and not pending)
 
     def on_start(self):
         self.manager.launch(manual=True, parent=self)
         self.update_ui()
 
     def on_stop(self):
-        self.manager.stop_all()
+        lifecycle_controller = getattr(self, "lifecycle_controller", None)
+        if lifecycle_controller is not None:
+            lifecycle_controller.request_stop(self.manager)
+        else:
+            self.manager.stop_all()
         self.update_ui()
 
     def _notify_result(self, result):

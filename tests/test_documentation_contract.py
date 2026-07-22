@@ -10,15 +10,22 @@ SAMPLE = ROOT / "setting.yaml.sample"
 
 
 class PublicDocumentationContractTests(unittest.TestCase):
-    def test_readme_documents_independent_popup_and_preferences(self):
+    def test_readme_documents_transient_ui_terminal_background_stop_and_pins(self):
         text = README.read_text(encoding="utf-8")
         for required in (
             "Open Config",
             "nhấp trái tên app",
+            "Open terminal here",
+            "outside click",
+            "background command worker",
+            "không block GUI thread",
             "popup độc lập",
             "không thay đổi geometry của tray panel",
             "latest-wins",
             "## Inline live logs",
+            "**PIN**",
+            "**UNPIN**",
+            "không chồng lên nhau",
             "[alpha,beta,!drop-me]",
             "Live paused while scrolled",
             ".runtime/ui-log-preferences.json",
@@ -29,7 +36,6 @@ class PublicDocumentationContractTests(unittest.TestCase):
                 self.assertIn(required, text)
 
         for removed in (
-            "Open terminal here",
             "## App tools",
             "`tools`",
             "Menu mở rộng lên trên",

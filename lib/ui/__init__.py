@@ -1,5 +1,6 @@
 """Focused UI components used by the launcher."""
 
+from .app_context_popup import AppContextPopup, compute_context_popup_rect
 from .app_tools import AppToolActionResult, AppToolService
 from .app_row import AppControlWidget, AppNameLabel, HoverLogButton
 from .inline_log_panel import (
@@ -21,8 +22,10 @@ from .log_filter import (
     highlight_ranges,
     parse_filter_expression,
 )
+from .lifecycle_commands import BackgroundCommandExecutor, LifecycleCommandController
 from .log_hover import LatestLogReader, LogHoverController, LogTarget
 from .log_popup import LogPopupWindow, compute_log_popup_rect
+from .pinned_logs import MultiLogReader, PinnedLogManager, compute_pinned_log_rects
 from .log_preferences import (
     LogPanelPreference,
     LogPanelPreferenceStore,
@@ -43,8 +46,17 @@ from .log_reader import (
     classify_log_change,
 )
 from .tray_panel import TrayActionButton, TrayPanelWindow, compute_tray_panel_rect
+from .transient_ui import TransientUiController
 
 __all__ = [
+    "compute_pinned_log_rects",
+    "compute_context_popup_rect",
+    "TransientUiController",
+    "PinnedLogManager",
+    "MultiLogReader",
+    "LifecycleCommandController",
+    "BackgroundCommandExecutor",
+    "AppContextPopup",
     "AppControlWidget",
     "AppNameLabel",
     "AppToolActionResult",

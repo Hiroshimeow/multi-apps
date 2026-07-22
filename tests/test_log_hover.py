@@ -232,6 +232,64 @@ class LogHoverControllerTests(unittest.TestCase):
                 popup.deleteLater()
                 QApplication.processEvents()
 
+    def test_reset_bottom_metadata_is_owned_by_accepted_request_id(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = root / "demo.log"
+            path.write_text("demo\n", encoding="utf-8")
+            reader = ManualReader()
+            popup = LogPopupWindow()
+            controller = LogHoverController(
+                popup,
+                LogPanelPreferenceStore(root / "preferences.json"),
+                placement_provider=lambda: (
+                    QRect(600, 400, 620, 300),
+                    QRect(0, 0, 1400, 900),
+                ),
+                reader=reader,
+                refresh_interval_ms=10000,
+            )
+            target = LogTarget(
+                "demo",
+                FakeManager("demo", {"out": path, "err": path}),
+            )
+            observed = []
+            original = popup.panel.update_snapshot
+
+            def capture(snapshot, *, reset_bottom=False, force=False):
+                observed.append((snapshot.lines, reset_bottom))
+                return original(snapshot, reset_bottom=reset_bottom, force=force)
+
+            popup.panel.update_snapshot = capture
+            try:
+                controller.open_target(target, "stdout")
+                first = controller._latest_read_id
+                second = controller.request_refresh(reset_bottom=False)
+                stale = LogSnapshot(
+                    path=str(path),
+                    state=LogSnapshotState.READY,
+                    lines=("stale",),
+                    size_bytes=1,
+                    file_identity=(1, 1),
+                )
+                latest = LogSnapshot(
+                    path=str(path),
+                    state=LogSnapshotState.READY,
+                    lines=("latest",),
+                    size_bytes=1,
+                    file_identity=(1, 2),
+                )
+                reader.snapshot_ready.emit(first, stale)
+                reader.snapshot_ready.emit(second, latest)
+                QApplication.processEvents()
+
+                self.assertEqual(observed, [(("latest",), False)])
+                self.assertEqual(controller._request_reset_bottom, {})
+            finally:
+                controller.shutdown()
+                popup.deleteLater()
+                QApplication.processEvents()
+
     def test_late_leave_from_previous_button_does_not_cancel_new_hover_owner(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

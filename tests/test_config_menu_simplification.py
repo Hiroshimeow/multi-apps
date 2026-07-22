@@ -51,10 +51,10 @@ class ConfigSchemaSimplificationTests(unittest.TestCase):
 
 
 class AppNameInteractionSimplificationTests(unittest.TestCase):
-    def test_app_name_has_no_context_menu_contract(self):
+    def test_app_name_has_terminal_only_independent_context_contract(self):
         label = AppNameLabel("Demo")
         try:
-            self.assertFalse(hasattr(label, "context_requested"))
+            self.assertTrue(hasattr(label, "context_requested"))
             self.assertFalse(hasattr(AppControlWidget, "build_app_context_menu"))
             self.assertFalse(hasattr(AppControlWidget, "show_app_context_menu"))
         finally:

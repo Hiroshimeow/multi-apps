@@ -27,6 +27,7 @@ from PyQt6.QtCore import QTimer, Qt, QRect
 from lib.core import AppController
 from lib.runners.command_runner import CommandRunner
 from lib.runtime.single_instance import SingleInstanceLock
+from lib.ui.app_context_popup import AppContextPopup
 from lib.ui.app_tools import AppToolService
 from lib.ui.app_row import AppControlWidget, AppNameLabel, HoverLogButton
 from lib.ui.log_preferences import (
@@ -39,9 +40,12 @@ from lib.ui.log_reader import (
     DEFAULT_TAIL_LINES,
     LogSnapshotState,
 )
+from lib.ui.lifecycle_commands import LifecycleCommandController
 from lib.ui.log_hover import LogHoverController
 from lib.ui.log_popup import LogPopupWindow
+from lib.ui.pinned_logs import PinnedLogManager
 from lib.ui.tray_panel import TrayPanelWindow
+from lib.ui.transient_ui import TransientUiController
 from lib.utils import is_windows, is_linux
 
 
@@ -217,7 +221,7 @@ class AppManager:
 
     def stop_all(self):
         """Stop the app via controller."""
-        self.controller.stop_app(self.name)
+        return self.controller.stop_app(self.name)
 
     def get_status_info(self):
         """Return the registry-backed status snapshot for this app."""
@@ -333,6 +337,12 @@ class AppManager:
     def open_workdir(self):
         return self.tool_service.open_folder(self.get_workdir())
 
+    def terminal_status(self):
+        return self.tool_service.terminal_status(self.get_workdir())
+
+    def open_terminal(self):
+        return self.tool_service.open_terminal(self.get_workdir())
+
     def get_log_path(self, stream):
         """Return the newest active, otherwise newest historical, run log path."""
         status_info = self.get_status_info()
@@ -428,13 +438,29 @@ class SystemTrayApp(QSystemTrayIcon):
 
         self.tray_panel = TrayPanelWindow()
         self.log_popup = LogPopupWindow()
+        self.app_context_popup = AppContextPopup()
+        self.lifecycle_controller = LifecycleCommandController(parent=self)
+        self.pinned_logs = PinnedLogManager(
+            self.log_preference_store,
+            placement_provider=self._pinned_log_placement,
+            parent=self,
+        )
         self.log_controller = LogHoverController(
             self.log_popup,
             self.log_preference_store,
             placement_provider=self._log_popup_placement,
+            pin_handler=self._handle_log_pin,
+            is_pinned=self.pinned_logs.is_pinned,
             parent=self,
         )
-        self.tray_panel.hidden.connect(self.log_controller.hide_popup)
+        self.pinned_logs.changed.connect(self._pinned_logs_changed)
+        self.lifecycle_controller.command_finished.connect(self._lifecycle_finished)
+        self.tray_panel.hidden.connect(self._tray_panel_hidden)
+        self.transient_ui = TransientUiController(
+            windows_provider=self._protected_windows,
+            dismiss_callback=self.hide_transient_ui,
+            parent=self,
+        )
         self.rebuild_panel()
 
         self.activated.connect(self.on_tray_activated)
@@ -517,9 +543,12 @@ class SystemTrayApp(QSystemTrayIcon):
                 parent=self.tray_panel.rows_container,
                 result_notifier=self.notify_app_tool_failure,
                 log_controller=self.log_controller,
+                lifecycle_controller=self.lifecycle_controller,
             )
             for manager in self.managers
         ]
+        for row in self.row_widgets:
+            row.context_requested.connect(self.show_app_context)
         if self.row_widgets:
             rows = self.row_widgets
         else:
@@ -559,14 +588,94 @@ class SystemTrayApp(QSystemTrayIcon):
             return anchor, QRect(anchor.x(), anchor.y(), 1, 1)
         return anchor, screen.availableGeometry()
 
-    def _log_popup_placement(self):
+    def _pinned_log_placement(self):
         tray_rect = self.tray_panel.frameGeometry()
+        if tray_rect.isNull() or not tray_rect.isValid():
+            _anchor, available = self._tray_anchor_and_screen()
+            tray_rect = QRect(
+                available.right() - max(1, self.tray_panel.minimumWidth()) + 1,
+                available.bottom() - 260,
+                max(1, self.tray_panel.minimumWidth()),
+                240,
+            )
         screen = (
             QGuiApplication.screenAt(tray_rect.center())
             or QGuiApplication.primaryScreen()
         )
         available = screen.availableGeometry() if screen is not None else tray_rect
         return tray_rect, available
+
+    def _log_popup_placement(self):
+        tray_rect, available = self._pinned_log_placement()
+        return self.pinned_logs.transient_anchor_rect(tray_rect), available
+
+    def _protected_windows(self):
+        return (
+            self.tray_panel,
+            self.log_popup,
+            self.app_context_popup,
+            *self.pinned_logs.windows(),
+        )
+
+    def _tray_panel_hidden(self):
+        self.log_controller.hide_popup()
+        self.app_context_popup.hide()
+
+    def hide_transient_ui(self):
+        self.app_context_popup.hide()
+        self.log_controller.hide_popup()
+        self.tray_panel.hide()
+
+    def show_app_context(self, manager, global_pos):
+        status = manager.terminal_status()
+        self.app_context_popup.show_action(
+            global_pos,
+            text="Open terminal here",
+            callback=lambda current=manager: self._open_terminal(current),
+            enabled=status.ok,
+            tooltip=status.message,
+        )
+
+    def _open_terminal(self, manager):
+        result = manager.open_terminal()
+        if not result.ok:
+            self.showMessage(
+                "Open terminal failed",
+                f"{manager.name}: {result.message}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000,
+            )
+
+    def _handle_log_pin(self, target, stream, pinned, panel):
+        key = self.pinned_logs.key_for(target, stream)
+        if pinned:
+            self.pinned_logs.pin(
+                target,
+                stream,
+                line_count=panel.line_count.value(),
+                filter_expression=panel.filter_edit.text(),
+            )
+        else:
+            self.pinned_logs.unpin(key)
+        return True
+
+    def _pinned_logs_changed(self):
+        self.log_controller.refresh_pin_state()
+        self.log_controller.reposition_popup()
+
+    def _lifecycle_finished(self, app_id, ok, result):
+        for row in self.row_widgets:
+            if str(row.manager.app_id) == str(app_id):
+                row.update_ui()
+                break
+        if not ok:
+            message = str(result)
+            self.showMessage(
+                "Stop failed",
+                f"{app_id}: {message}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000,
+            )
 
     def show_panel(self):
         anchor, available = self._tray_anchor_and_screen()
@@ -577,6 +686,8 @@ class SystemTrayApp(QSystemTrayIcon):
             available,
             reserved_top_height=self.log_popup.reserved_height,
         )
+        self.pinned_logs.reposition_all()
+        self.log_controller.reposition_popup()
 
     def toggle_panel(self):
         if self.tray_panel.isVisible():
@@ -623,8 +734,12 @@ class SystemTrayApp(QSystemTrayIcon):
             self.notify_launcher_tool_failure(result)
 
     def stop_all_apps(self):
+        lifecycle_controller = getattr(self, "lifecycle_controller", None)
+        if lifecycle_controller is not None:
+            return lifecycle_controller.request_stop_all(tuple(self.managers))
         if self.controller:
-            self.controller.stop_all()
+            return self.controller.stop_all()
+        return 0
 
     def notify_launcher_tool_failure(self, result):
         self.showMessage(
@@ -655,6 +770,8 @@ class SystemTrayApp(QSystemTrayIcon):
             timers.extend(self.tray_panel.findChildren(QTimer))
         if hasattr(self, "log_controller"):
             timers.extend(self.log_controller.findChildren(QTimer))
+        if hasattr(self, "pinned_logs"):
+            timers.extend(self.pinned_logs.findChildren(QTimer))
         unique = {id(timer): timer for timer in timers}
         snapshot["ui_timers"] = [
             (timer, timer.isActive()) for timer in unique.values()
@@ -688,11 +805,23 @@ class SystemTrayApp(QSystemTrayIcon):
         auto_start = getattr(self, "auto_start_timer", None)
         if auto_start is not None:
             auto_start.stop()
+        transient = getattr(self, "transient_ui", None)
+        if transient is not None:
+            transient.shutdown()
         for row in tuple(getattr(self, "row_widgets", ())):
             row.shutdown()
+        lifecycle = getattr(self, "lifecycle_controller", None)
+        if lifecycle is not None:
+            lifecycle.shutdown()
         controller = getattr(self, "log_controller", None)
         if controller is not None:
             controller.shutdown()
+        pinned = getattr(self, "pinned_logs", None)
+        if pinned is not None:
+            pinned.shutdown()
+        context = getattr(self, "app_context_popup", None)
+        if context is not None:
+            context.hide()
         popup = getattr(self, "log_popup", None)
         if popup is not None:
             popup.hide()

@@ -26,8 +26,8 @@ Tray hiển thị trạng thái đã khôi phục ngay khi khởi động, khôn
 
 ### Stop và Stop All Apps
 
-- **Stop** là thao tác chủ động cho một app.
-- **Stop All Apps** là thao tác chủ động cho toàn bộ app enabled trong config hiện tại.
+- **Stop** là thao tác chủ động cho một app. Lệnh stop chạy trong background command worker nên Qt UI vẫn phản hồi.
+- **Stop All Apps** gửi từng app vào cùng worker, loại bỏ request trùng theo app ID và không block GUI thread.
 - Stop thử graceful shutdown trước, chờ tối đa `close_timeout`, sau đó force-close complete process tree nếu cần.
 - Supervisor xác minh PID cùng process creation time; không kill process chỉ dựa trên PID.
 - Log cuối cùng vẫn được giữ lại sau khi run dừng.
@@ -128,12 +128,13 @@ Các path tương đối được resolve từ thư mục chứa file config.
 Chuột phải icon tray mở `TrayPanelWindow`, một cửa sổ Qt độc lập thay vì nhét widget tương tác vào `QMenu`.
 
 - nhấp trái tên app để mở working directory của app;
-- nhấp phải tên app hoặc vùng trống trong row không thực hiện action;
+- nhấp phải tên app, phím Menu hoặc `Shift+F10` mở popup riêng có **Open terminal here**;
+- terminal được khởi chạy với `cwd` đúng working directory của app, không thay đổi working directory toàn cục của launcher;
 - **Open Config** mở đúng file YAML mà launcher hiện tại đang dùng;
 - **Stop All Apps**, **Restart Launcher** và **Exit Launcher** giữ nguyên chức năng tương ứng;
 - phím `Escape` ẩn tray panel.
 
-Các click bên trong label, row, filter, log text hoặc scrollbar không làm tray panel tự đóng. Tên app không có menu chuột phải riêng; cấu hình dùng chung được mở từ tray panel.
+Click bên ngoài tray panel, hover-log popup và app-context popup sẽ ẩn toàn bộ UI transient. Click bên trong label, row, filter, log text, scrollbar hoặc app-context popup không làm tray panel tự đóng. Các cửa sổ log đã **PIN** không bị đóng bởi outside click.
 
 ### Cách viết `args`
 
@@ -224,7 +225,10 @@ Popup có các điều khiển:
 
 - stream `stdout` hoặc `stderr` theo nút đang hover;
 - **Lines** mặc định **100 dòng**, cho phép **10–5000**;
-- **Filter** dùng các term literal, không phải regex và không render HTML.
+- **Filter** dùng các term literal, không phải regex và không render HTML;
+- **PIN** tạo một live-log window độc lập. Nhấn **UNPIN** trên chính window đ³ để bỏ ghim.
+
+Pinned logs tiếp tục refresh mỗi 500 ms ngay cả khi tray panel đã ẩn. Có thể pin nhiều app/stream cùng lúc; các window được xếp từ dưới lên trên và chuyển sang cột kế bên khi không còn đủ chiều cao, vì vậy không chồng lên nhau. Pinned logs dùng chung một background reader có pending request riêng theo `(app_id, stream)`, không tạo một worker thread cho mỗi window.
 
 Filter có thể viết `alpha,beta,!drop-me` hoặc `[alpha,beta,!drop-me]`. Dòng được giữ khi chứa ít nhất một positive term; term có tiền tố `!` loại dòng. Positive term được highlight trên nguyên văn log. Dấu phẩy bên trong term không được hỗ trợ.
 

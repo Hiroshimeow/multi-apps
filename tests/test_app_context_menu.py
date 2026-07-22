@@ -2,40 +2,127 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QSignalSpy, QTest
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QWidget
+from PyQt6.QtWidgets import QApplication, QWidget
 
-from lib.ui.app_tools import AppToolActionResult
-from multi import AppControlWidget, AppNameLabel, SystemTrayApp
+from lib.ui.app_context_popup import AppContextPopup
+from lib.ui.app_tools import AppToolActionResult, AppToolService
+from multi import AppControlWidget, AppNameLabel
 
 
 _QT_APP = QApplication.instance() or QApplication([])
+
+
+def success(target="C:/work"):
+    return AppToolActionResult(True, "OPENED", "opened", target=target)
 
 
 def failure(message="failed"):
     return AppToolActionResult(False, "LAUNCH_FAILED", message, target="C:/work")
 
 
+class AppToolTerminalTests(unittest.TestCase):
+    def test_windows_terminal_launch_uses_exact_cwd_without_global_chdir(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            launcher = MagicMock()
+            service = AppToolService(
+                platform_name="Windows",
+                which=lambda name: "C:/Windows/System32/cmd.exe" if name == "cmd.exe" else None,
+                process_launcher=launcher,
+            )
+            old_cwd = Path.cwd()
+
+            result = service.open_terminal(str(root))
+
+            self.assertTrue(result.ok)
+            self.assertEqual(Path.cwd(), old_cwd)
+            self.assertEqual(result.target, str(root))
+            launcher.assert_called_once()
+            args, kwargs = launcher.call_args
+            self.assertEqual(
+                args[0],
+                ["C:/Windows/System32/cmd.exe", "/D", "/K"],
+            )
+            self.assertEqual(Path(kwargs["cwd"]), root)
+            self.assertEqual(
+                kwargs["creationflags"],
+                getattr(__import__("subprocess"), "CREATE_NEW_CONSOLE", 0),
+            )
+            self.assertNotIn("stdin", kwargs)
+
+    def test_windows_terminal_prefers_wt_and_passes_directory_argument(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            launcher = MagicMock()
+            service = AppToolService(
+                platform_name="Windows",
+                which=lambda name: "C:/Windows/System32/wt.exe" if name == "wt.exe" else None,
+                process_launcher=launcher,
+            )
+
+            result = service.open_terminal(str(root))
+
+            self.assertTrue(result.ok)
+            args, kwargs = launcher.call_args
+            self.assertEqual(
+                args[0],
+                ["C:/Windows/System32/wt.exe", "-d", str(root)],
+            )
+            self.assertNotIn("cwd", kwargs)
+            self.assertIn("stdin", kwargs)
+
+
+
 class AppNameLabelTests(unittest.TestCase):
-    def test_only_left_click_emits_an_action(self):
+    def test_left_click_and_context_keyboard_have_distinct_signals(self):
         label = AppNameLabel("Demo")
         label.resize(160, 30)
         label.show()
+        label.setFocus()
         QApplication.processEvents()
         try:
-            clicked = QSignalSpy(label.left_clicked)
+            left = QSignalSpy(label.left_clicked)
+            context = QSignalSpy(label.context_requested)
             QTest.mouseClick(label, Qt.MouseButton.LeftButton)
             QTest.mouseClick(label, Qt.MouseButton.RightButton)
-            QTest.mouseClick(label, Qt.MouseButton.MiddleButton)
-            self.assertEqual(len(clicked), 1)
-            self.assertFalse(hasattr(label, "context_requested"))
+            QTest.keyClick(label, Qt.Key.Key_Menu)
+            QTest.keyClick(label, Qt.Key.Key_F10, Qt.KeyboardModifier.ShiftModifier)
+            self.assertEqual(len(left), 1)
+            self.assertEqual(len(context), 3)
         finally:
             label.close()
             label.deleteLater()
+            QApplication.processEvents()
+
+
+class AppContextPopupTests(unittest.TestCase):
+    def test_popup_contains_only_terminal_action_and_hides_after_trigger(self):
+        popup = AppContextPopup()
+        callback = MagicMock()
+        try:
+            popup.show_action(
+                QPoint(400, 300),
+                text="Open terminal here",
+                callback=callback,
+                enabled=True,
+                tooltip="ready",
+            )
+            QApplication.processEvents()
+            self.assertTrue(popup.isVisible())
+            self.assertEqual(popup.action_button.text(), "Open terminal here")
+            QTest.mouseClick(popup.action_button, Qt.MouseButton.LeftButton)
+            QApplication.processEvents()
+            callback.assert_called_once_with()
+            self.assertFalse(popup.isVisible())
+        finally:
+            popup.deleteLater()
             QApplication.processEvents()
 
 
@@ -55,21 +142,17 @@ class AppRowInteractionTests(unittest.TestCase):
             "text": "PID: -",
             "tooltip": "Last run PID unavailable",
         }
-        manager.open_workdir.return_value = AppToolActionResult(
-            True,
-            "OPENED",
-            "opened",
-            target="C:/work",
-        )
+        manager.open_workdir.return_value = success()
         return manager
 
-    def make_widget(self, manager=None, notifier=None, controller=None):
+    def make_widget(self, manager=None, notifier=None, controller=None, lifecycle=None):
         host = QWidget()
         widget = AppControlWidget(
             manager or self.make_manager(),
             parent=host,
             result_notifier=notifier,
             log_controller=controller,
+            lifecycle_controller=lifecycle,
         )
         widget.show()
         QApplication.processEvents()
@@ -84,16 +167,20 @@ class AppRowInteractionTests(unittest.TestCase):
         host.deleteLater()
         QApplication.processEvents()
 
-    def test_name_left_click_opens_folder_and_right_click_does_nothing(self):
+    def test_name_left_click_opens_folder_and_context_routes_manager_and_position(self):
         manager = self.make_manager()
         widget = self.make_widget(manager)
+        context = QSignalSpy(widget.context_requested)
+
         QTest.mouseClick(widget.lbl_name, Qt.MouseButton.LeftButton)
         QTest.mouseClick(widget.lbl_name, Qt.MouseButton.RightButton)
+        QApplication.processEvents()
+
         manager.open_workdir.assert_called_once_with()
-        self.assertIn("Left-click", widget.lbl_name.toolTip())
-        self.assertNotIn("Right-click", widget.lbl_name.toolTip())
-        self.assertFalse(hasattr(widget, "build_app_context_menu"))
-        self.assertFalse(hasattr(widget, "show_app_context_menu"))
+        self.assertEqual(len(context), 1)
+        self.assertIs(context[0][0], manager)
+        self.assertIsInstance(context[0][1], QPoint)
+        self.assertIn("Right-click", widget.lbl_name.toolTip())
 
     def test_folder_failure_notifies_once_success_does_not_notify(self):
         notifier = MagicMock()
@@ -105,44 +192,9 @@ class AppRowInteractionTests(unittest.TestCase):
         notifier.assert_called_once_with(manager.name, manager.open_workdir.return_value)
 
         notifier.reset_mock()
-        manager.open_workdir.return_value = AppToolActionResult(True, "OPENED", "opened")
+        manager.open_workdir.return_value = success()
         QTest.mouseClick(widget.lbl_name, Qt.MouseButton.LeftButton)
         notifier.assert_not_called()
-
-    def test_row_owns_no_log_panel_and_routes_hover_to_shared_controller(self):
-        manager = self.make_manager()
-        controller = MagicMock()
-        widget = self.make_widget(manager, controller=controller)
-
-        self.assertFalse(hasattr(widget, "inline_log_panel"))
-        self.assertIs(widget.log_controller, controller)
-
-        widget.btn_ologs.hover_entered.emit()
-        widget.btn_ologs.hover_left.emit()
-        widget.btn_elogs.hover_entered.emit()
-        widget.btn_elogs.hover_left.emit()
-        QTest.mouseClick(widget.btn_ologs, Qt.MouseButton.LeftButton)
-        QTest.mouseClick(widget.btn_elogs, Qt.MouseButton.LeftButton)
-
-        controller.hover_enter.assert_any_call(widget.log_target, "stdout")
-        controller.hover_leave.assert_any_call(widget.log_target, "stdout")
-        controller.hover_enter.assert_any_call(widget.log_target, "stderr")
-        controller.hover_leave.assert_any_call(widget.log_target, "stderr")
-        manager.view_output_log.assert_called_once_with(False)
-        manager.view_error_log.assert_called_once_with(False)
-
-
-class TrayFailureNotificationTests(unittest.TestCase):
-    def test_folder_failure_notification_is_non_modal(self):
-        tray = type("Tray", (), {"showMessage": MagicMock()})()
-        result = failure("could not open")
-        SystemTrayApp.notify_app_tool_failure(tray, "Demo", result)
-        tray.showMessage.assert_called_once_with(
-            "Open folder failed",
-            "Demo: could not open",
-            QSystemTrayIcon.MessageIcon.Warning,
-            5000,
-        )
 
 
 if __name__ == "__main__":

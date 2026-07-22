@@ -62,6 +62,7 @@ class LogPopupWindow(QFrame):
             self.panel.filter_edit,
             self.panel.line_count,
             self.panel.log_view,
+            self.panel.pin_button,
         ):
             widget.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         layout.addWidget(self.panel)
