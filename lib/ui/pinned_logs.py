@@ -6,10 +6,11 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, QRect, QSize, QTimer, pyqtSignal
+from PyQt6.QtGui import QGuiApplication
 
 from .inline_log_panel import PANEL_EMERGENCY_MIN_HEIGHT, PANEL_PREFERRED_HEIGHT
 from .log_hover import LogTarget
-from .log_popup import LogPopupWindow
+from .log_popup import PinnedLogWindow
 from .log_preferences import LogPanelPreference
 from .log_reader import BoundedLogReader, DEFAULT_MAX_BYTES, LogSnapshot, LogSnapshotState
 
@@ -134,7 +135,7 @@ class _PinnedSession:
     key: tuple[str, str]
     target: LogTarget
     stream: str
-    window: LogPopupWindow
+    window: PinnedLogWindow
     latest_read_id: int | None = None
     request_reset_bottom: dict[int, bool] | None = None
 
@@ -367,11 +368,15 @@ class PinnedLogManager(QObject):
         placement_provider,
         reader=None,
         refresh_interval_ms=500,
+        screens_provider=None,
         parent=None,
     ):
         super().__init__(parent)
         self.preference_store = preference_store
         self.placement_provider = placement_provider
+        self.screens_provider = screens_provider or (
+            lambda: tuple(screen.availableGeometry() for screen in QGuiApplication.screens())
+        )
         self.reader = reader or MultiLogReader(parent=self)
         self.sessions = OrderedDict()
         self._shutdown = False
@@ -399,11 +404,14 @@ class PinnedLogManager(QObject):
         key = self.key_for(target, stream)
         existing = self.sessions.get(key)
         if existing is not None:
+            self.ensure_visible(existing)
             existing.window.show()
             existing.window.raise_()
             return existing.window
-        window = LogPopupWindow()
-        window.panel.set_source_name(getattr(target.manager, "name", target.app_id))
+        window = PinnedLogWindow()
+        source_name = getattr(target.manager, "name", target.app_id)
+        window.panel.set_source_name(source_name)
+        window.set_source_title(source_name, stream)
         window.panel.configure_controls(
             line_count=line_count,
             filter_expression=filter_expression,
@@ -412,6 +420,7 @@ class PinnedLogManager(QObject):
         window.panel.set_pin_state(True)
         session = _PinnedSession(key, target, stream, window)
         self.sessions[key] = session
+        window.close_requested.connect(lambda current=key: self.unpin(current))
         window.panel.pin_changed.connect(
             lambda pinned, current=key: None if pinned else self.unpin(current)
         )
@@ -421,7 +430,7 @@ class PinnedLogManager(QObject):
         window.panel.line_count_changed.connect(
             lambda _value, current=key: self._line_count_changed(current)
         )
-        self.reposition_all()
+        self.place_initial(session)
         self._request(session, reset_bottom=True)
         if not self.refresh_timer.isActive():
             self.refresh_timer.start()
@@ -438,8 +447,6 @@ class PinnedLogManager(QObject):
         session.window.deleteLater()
         if not self.sessions:
             self.refresh_timer.stop()
-        else:
-            self.reposition_all()
         self.changed.emit()
         return True
 
@@ -491,30 +498,76 @@ class PinnedLogManager(QObject):
         reset_bottom = session.request_reset_bottom.pop(request_id, False)
         session.window.panel.queue_snapshot(snapshot, reset_bottom=reset_bottom)
 
-    def reposition_all(self):
-        if not self.sessions:
-            return ()
+    @staticmethod
+    def _minimum_frame_size(window):
+        frame = window.frameGeometry()
+        return QSize(
+            window.minimumWidth() + max(0, frame.width() - window.width()),
+            window.minimumHeight() + max(0, frame.height() - window.height()),
+        )
+
+    @staticmethod
+    def _set_frame_geometry(window, target):
+        frame = window.frameGeometry()
+        horizontal_frame = max(0, frame.width() - window.width())
+        vertical_frame = max(0, frame.height() - window.height())
+        window.resize(
+            max(window.minimumWidth(), target.width() - horizontal_frame),
+            max(window.minimumHeight(), target.height() - vertical_frame),
+        )
+        current = window.frameGeometry()
+        window.move(
+            window.x() + target.left() - current.left(),
+            window.y() + target.top() - current.top(),
+        )
+        return QRect(window.frameGeometry())
+
+    def place_initial(self, session):
         tray_rect, available = self.placement_provider()
-        rects = compute_pinned_log_rects(
-            len(self.sessions),
-            QSize(max(1, tray_rect.width()), PANEL_PREFERRED_HEIGHT),
+        window = session.window
+        window.ensurePolished()
+        window.resize(
+            max(window.minimumWidth(), tray_rect.width()),
+            max(window.minimumHeight(), PANEL_PREFERRED_HEIGHT),
+        )
+        window.panel.show()
+        window.show()
+        window.winId()
+        occupied = tuple(
+            other.window.frameGeometry()
+            for other in self.sessions.values()
+            if other is not session and other.window.isVisible()
+        )
+        target = compute_initial_pinned_log_rect(
+            window.frameGeometry().size(),
+            self._minimum_frame_size(window),
             tray_rect,
             available,
+            occupied,
         )
-        for session, rect in zip(self.sessions.values(), rects):
-            session.window.panel.setPreferredHeight(rect.height())
-            session.window.setGeometry(rect)
-            session.window.panel.show()
-            session.window.show()
-            session.window.raise_()
-        return rects
+        self._set_frame_geometry(window, target)
+        window.raise_()
+        return QRect(window.frameGeometry())
+
+    def ensure_visible(self, session):
+        _tray_rect, fallback = self.placement_provider()
+        screens = tuple(QRect(rect) for rect in self.screens_provider()) or (fallback,)
+        current = QRect(session.window.frameGeometry())
+        target = recover_pinned_log_rect(
+            current,
+            self._minimum_frame_size(session.window),
+            screens,
+            fallback,
+        )
+        if target != current:
+            self._set_frame_geometry(session.window, target)
+        return QRect(session.window.frameGeometry())
+
+    def ensure_visible_all(self):
+        return tuple(self.ensure_visible(session) for session in self.sessions.values())
 
     def transient_anchor_rect(self, tray_rect):
-        visible = [window.frameGeometry() for window in self.windows() if window.isVisible()]
-        if not visible:
-            return tray_rect
-        top = min(rect.top() for rect in visible)
-        return QRect(tray_rect.left(), top, tray_rect.width(), tray_rect.height())
+        return QRect(tray_rect)
 
     def shutdown(self):
         if self._shutdown:

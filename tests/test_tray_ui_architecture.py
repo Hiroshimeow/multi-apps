@@ -164,6 +164,36 @@ class TrayUiArchitectureTests(unittest.TestCase):
         self.assertFalse(self.tray.tray_panel.isVisible())
 
 
+    def test_user_adjusted_pin_geometry_survives_tray_reopen_and_refresh(self):
+        self.tray.show_panel()
+        row = self.tray.row_widgets[0]
+        self.tray.log_controller.open_target(row.log_target, "stdout")
+        self.assertTrue(wait_until(lambda: self.tray.log_popup.isVisible()))
+        QTest.mouseClick(self.tray.log_popup.panel.pin_button, Qt.MouseButton.LeftButton)
+        self.assertTrue(wait_until(lambda: self.tray.pinned_logs.count() == 1))
+        pinned = self.tray.pinned_logs.windows()[0]
+        pinned.setGeometry(QRect(120, 140, 700, 320))
+        QApplication.processEvents()
+        user_geometry = QRect(pinned.frameGeometry())
+
+        self.tray.tray_panel.hide()
+        self.tray.show_panel()
+        QApplication.processEvents()
+        self.assertEqual(pinned.frameGeometry(), user_geometry)
+
+        self.tray.refresh_all()
+        QApplication.processEvents()
+        self.assertEqual(pinned.frameGeometry(), user_geometry)
+        self.assertTrue(pinned.isVisible())
+
+        log_path = Path(self.tray.row_widgets[0].manager.get_log_path("out"))
+        log_path.write_text("demo-output\nafter-refresh\n", encoding="utf-8")
+        self.assertTrue(
+            wait_until(
+                lambda: "after-refresh" in pinned.panel.log_view.toPlainText()
+            )
+        )
+
     def test_pin_survives_tray_hide_outside_click_and_unpins_from_own_window(self):
         self.tray.show_panel()
         row = self.tray.row_widgets[0]

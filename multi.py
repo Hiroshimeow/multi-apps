@@ -688,7 +688,7 @@ class SystemTrayApp(QSystemTrayIcon):
             available,
             reserved_top_height=self.log_popup.reserved_height,
         )
-        self.pinned_logs.reposition_all()
+        self.pinned_logs.ensure_visible_all()
         self.log_controller.reposition_popup()
 
     def toggle_panel(self):

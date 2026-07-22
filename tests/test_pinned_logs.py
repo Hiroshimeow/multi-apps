@@ -173,6 +173,100 @@ class PinnedLogGeometryTests(unittest.TestCase):
 
 
 class PinnedLogManagerTests(unittest.TestCase):
+    def test_user_geometry_is_preserved_and_only_inaccessible_windows_recover(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first_path = root / "first.log"
+            second_path = root / "second.log"
+            first_path.write_text("first-1\n", encoding="utf-8")
+            second_path.write_text("second-1\n", encoding="utf-8")
+            first = LogTarget("first", FakeManager("first", "First", first_path))
+            second = LogTarget("second", FakeManager("second", "Second", second_path))
+            available = QRect(0, 0, 1600, 1000)
+            tray_rect = QRect(980, 700, 620, 240)
+            manager = PinnedLogManager(
+                LogPanelPreferenceStore(root / "preferences.json"),
+                placement_provider=lambda: (tray_rect, available),
+                screens_provider=lambda: (available,),
+                refresh_interval_ms=50,
+            )
+            try:
+                first_window = manager.pin(
+                    first,
+                    "stdout",
+                    line_count=100,
+                    filter_expression="",
+                )
+                self.assertTrue(
+                    wait_until(
+                        lambda: first_window.panel.log_view.toPlainText() == "first-1"
+                    )
+                )
+                first_window.setGeometry(QRect(120, 140, 700, 320))
+                QApplication.processEvents()
+                user_geometry = QRect(first_window.frameGeometry())
+
+                manager.ensure_visible_all()
+                QApplication.processEvents()
+                self.assertEqual(first_window.frameGeometry(), user_geometry)
+                self.assertEqual(manager.transient_anchor_rect(tray_rect), tray_rect)
+
+                second_window = manager.pin(
+                    second,
+                    "stderr",
+                    line_count=100,
+                    filter_expression="",
+                )
+                self.assertTrue(
+                    wait_until(
+                        lambda: second_window.panel.log_view.toPlainText() == "second-1"
+                    )
+                )
+                self.assertEqual(first_window.frameGeometry(), user_geometry)
+                self.assertFalse(
+                    first_window.frameGeometry().intersects(second_window.frameGeometry())
+                )
+
+                manager.unpin(("second", "stderr"))
+                QApplication.processEvents()
+                self.assertEqual(first_window.frameGeometry(), user_geometry)
+
+                first_window.setGeometry(QRect(5000, 5000, 700, 320))
+                QApplication.processEvents()
+                manager.ensure_visible_all()
+                QApplication.processEvents()
+                recovered = QRect(first_window.frameGeometry())
+                self.assertTrue(available.contains(recovered), recovered)
+
+                second_window = manager.pin(
+                    second,
+                    "stderr",
+                    line_count=100,
+                    filter_expression="",
+                )
+                second_key = ("second", "stderr")
+                self.assertTrue(
+                    wait_until(lambda: second_key in manager.reader._readers)
+                )
+                second_window.close()
+                self.assertTrue(
+                    wait_until(
+                        lambda: second_key not in manager.sessions
+                        and second_key not in manager.reader._readers
+                    )
+                )
+                self.assertEqual(manager.count(), 1)
+
+                first_path.write_text("first-1\nfirst-2\n", encoding="utf-8")
+                self.assertTrue(
+                    wait_until(
+                        lambda: "first-2" in first_window.panel.log_view.toPlainText()
+                    )
+                )
+            finally:
+                manager.shutdown()
+            self.assertFalse(manager.reader.is_alive())
+
     def test_multiple_pinned_logs_stack_without_overlap_stay_live_and_unpin_independently(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
