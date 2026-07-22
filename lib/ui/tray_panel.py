@@ -144,7 +144,11 @@ class TrayPanelWindow(QFrame):
         reserved_top_height=0,
     ):
         self.ensurePolished()
-        natural = self.sizeHint().expandedTo(self.minimumSizeHint())
+        natural = (
+            self.sizeHint()
+            .expandedTo(self.minimumSizeHint())
+            .expandedTo(self.minimumSize())
+        )
         reserved_top_height = max(0, int(reserved_top_height))
         reserved_top = (
             available_geometry.top() + PANEL_MARGIN + reserved_top_height
@@ -159,6 +163,15 @@ class TrayPanelWindow(QFrame):
             compute_tray_panel_rect(requested, anchor_rect, available_geometry)
         )
         self.show()
+        actual = self.frameGeometry()
+        aligned = compute_tray_panel_rect(
+            actual.size(),
+            anchor_rect,
+            available_geometry,
+        )
+        if actual.topLeft() != aligned.topLeft():
+            delta = aligned.topLeft() - actual.topLeft()
+            self.move(self.pos() + delta)
         self.raise_()
         return self.frameGeometry()
 

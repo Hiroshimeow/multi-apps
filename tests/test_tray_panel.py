@@ -33,6 +33,29 @@ class TrayPanelGeometryTests(unittest.TestCase):
 
 
 class TrayPanelInteractionTests(unittest.TestCase):
+    def test_show_time_growth_is_realigned_to_usable_right_edge(self):
+        class GrowingTrayPanel(TrayPanelWindow):
+            def show(self):
+                super().show()
+                self.setMinimumWidth(700)
+                self.resize(700, self.height())
+
+        panel = GrowingTrayPanel()
+        available = QRect(0, 0, 1920, 1032)
+        geometry = panel.show_at(
+            QRect(1880, 1000, 32, 32),
+            available,
+            reserved_top_height=228,
+        )
+        QApplication.processEvents()
+        try:
+            self.assertEqual(geometry.right(), available.right())
+            self.assertEqual(panel.frameGeometry().right(), available.right())
+        finally:
+            panel.hide()
+            panel.deleteLater()
+            QApplication.processEvents()
+
     def test_internal_left_and_right_clicks_do_not_hide_panel(self):
         panel = TrayPanelWindow()
         row = QWidget()
