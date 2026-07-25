@@ -368,7 +368,12 @@ class ArgsEditNestedEventTests(unittest.TestCase):
             controllers=[controller],
         )
         tray.load_config = lambda: SystemTrayApp.load_config(tray)
-        tray.refresh_menu = lambda: None
+        tray.tray_panel = SimpleNamespace(
+            isVisible=lambda: False,
+            hide=lambda: None,
+        )
+        tray.rebuild_panel = lambda: None
+        tray.show_panel = lambda: None
         return controller, managers, tray
 
     @staticmethod

@@ -8,30 +8,86 @@
 import sys
 import os
 import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication,
     QSystemTrayIcon,
-    QMenu,
-    QWidget,
-    QWidgetAction,
     QLabel,
-    QPushButton,
-    QHBoxLayout,
     QVBoxLayout,
     QDialog,
     QDialogButtonBox,
     QLineEdit,
     QMessageBox,
-    QSizePolicy,
 )
-from PyQt6.QtGui import QIcon, QAction, QFont, QGuiApplication
-from PyQt6.QtCore import QTimer, pyqtSignal, Qt, QPoint
+from PyQt6.QtGui import QCursor, QIcon, QGuiApplication
+from PyQt6.QtCore import QTimer, Qt, QRect
 
 # Import from modular library
 from lib.core import AppController
 from lib.runners.command_runner import CommandRunner
 from lib.runtime.single_instance import SingleInstanceLock
+from lib.ui.app_context_popup import AppContextPopup
+from lib.ui.app_tools import AppToolService
+from lib.ui.app_row import AppControlWidget, AppNameLabel, HoverLogButton
+from lib.ui.log_preference_owner import LogPreferenceOwner
+from lib.ui.log_preferences import (
+    LogPanelPreferenceStore,
+    default_log_preferences_path,
+)
+from lib.ui.log_reader import (
+    BoundedLogReader,
+    DEFAULT_MAX_BYTES,
+    DEFAULT_TAIL_LINES,
+    LogSnapshotState,
+)
+from lib.ui.lifecycle_commands import LifecycleCommandController
+from lib.ui.log_hover import LogHoverController
+from lib.ui.log_popup import LogPopupWindow
+from lib.ui.pinned_logs import PinnedLogManager
+from lib.ui.tray_panel import TrayPanelWindow
+from lib.ui.transient_ui import TransientUiController
 from lib.utils import is_windows, is_linux
+
+
+@dataclass(frozen=True, slots=True)
+class LauncherArgs:
+    config_path: str
+    qt_argv: tuple[str, ...]
+    launcher_argv: tuple[str, ...]
+
+
+def parse_launcher_args(argv):
+    """Extract launcher-owned arguments while preserving all Qt arguments."""
+    values = [str(value) for value in argv] or ["multi.py"]
+    program = values[0]
+    qt_argv = [program]
+    config_value = "setting.yaml"
+
+    index = 1
+    while index < len(values):
+        value = values[index]
+        if value == "--config":
+            index += 1
+            if index >= len(values):
+                raise ValueError("--config requires a path")
+            config_value = values[index]
+        elif value.startswith("--config="):
+            config_value = value.split("=", 1)[1]
+            if not config_value:
+                raise ValueError("--config requires a path")
+        else:
+            qt_argv.append(value)
+        index += 1
+
+    config_path = str(Path(config_value).expanduser().resolve(strict=False))
+    launcher_argv = (program, "--config", config_path, *qt_argv[1:])
+    return LauncherArgs(
+        config_path=config_path,
+        qt_argv=tuple(qt_argv),
+        launcher_argv=tuple(launcher_argv),
+    )
+
 
 # ==========================================
 # 1. WRAPPERS
@@ -116,6 +172,8 @@ class AppManager:
         controller,
         app_name,
         startup_auto_start_suppressed_ids=None,
+        tool_service=None,
+        log_reader=None,
     ):
         self.controller = controller
         self.name = app_name
@@ -125,6 +183,8 @@ class AppManager:
             if startup_auto_start_suppressed_ids is not None
             else set()
         )
+        self.tool_service = tool_service or AppToolService()
+        self.log_reader = log_reader or BoundedLogReader()
 
     @property
     def app_id(self):
@@ -162,7 +222,7 @@ class AppManager:
 
     def stop_all(self):
         """Stop the app via controller."""
-        self.controller.stop_app(self.name)
+        return self.controller.stop_app(self.name)
 
     def get_status_info(self):
         """Return the registry-backed status snapshot for this app."""
@@ -275,6 +335,15 @@ class AppManager:
         """Return the directory opened when the app name is clicked."""
         return self.controller.get_app_workdir(self.name)
 
+    def open_workdir(self):
+        return self.tool_service.open_folder(self.get_workdir())
+
+    def terminal_status(self):
+        return self.tool_service.terminal_status(self.get_workdir())
+
+    def open_terminal(self):
+        return self.tool_service.open_terminal(self.get_workdir())
+
     def get_log_path(self, stream):
         """Return the newest active, otherwise newest historical, run log path."""
         status_info = self.get_status_info()
@@ -289,34 +358,36 @@ class AppManager:
         suffix = "out" if stream == "out" else "err"
         return os.path.join(log_dir, f"{self.name}.{suffix}.log")
 
+    def get_log_snapshot(
+        self,
+        stream,
+        *,
+        max_lines=DEFAULT_TAIL_LINES,
+        max_bytes=DEFAULT_MAX_BYTES,
+    ):
+        return self.log_reader.read(
+            self.get_log_path(stream),
+            max_lines=max_lines,
+            max_bytes=max_bytes,
+        )
+
     def read_log_tail(self, stream, max_lines=7, max_bytes=65536, max_line_chars=220):
-        """Read a small tail of one log without loading the full file."""
-        path = self.get_log_path(stream)
+        """Return the existing formatted preview from a bounded structured snapshot."""
+        snapshot = self.get_log_snapshot(
+            stream,
+            max_lines=max_lines,
+            max_bytes=max_bytes,
+        )
         label = "output" if stream == "out" else "error"
-        if not os.path.exists(path):
+        if snapshot.state == LogSnapshotState.MISSING:
             return f"[{label} log does not exist]"
-
-        try:
-            with open(path, "rb") as handle:
-                handle.seek(0, os.SEEK_END)
-                size = handle.tell()
-                read_size = min(size, max_bytes)
-                handle.seek(-read_size, os.SEEK_END)
-                raw = handle.read(read_size)
-        except OSError as exc:
-            return f"[cannot read {label} log: {exc}]"
-
-        text = raw.decode("utf-8", errors="replace")
-        lines = text.splitlines()
-
-        # The first line can be partial when reading only the end of a large file.
-        if size > read_size and lines:
-            lines = lines[1:]
-        if not lines:
+        if snapshot.state == LogSnapshotState.EMPTY:
             return f"[{label} log is empty]"
+        if snapshot.state == LogSnapshotState.UNREADABLE:
+            return f"[cannot read {label} log: {snapshot.error}]"
 
         tail = []
-        for line in lines[-max_lines:]:
+        for line in snapshot.lines[-max_lines:]:
             line = line.replace("	", "    ")
             if len(line) > max_line_chars:
                 line = line[: max_line_chars - 3] + "..."
@@ -329,268 +400,76 @@ class AppManager:
 # ==========================================
 
 
-class ClickableLabel(QLabel):
-    """A QLabel subclass that emits a signal when clicked."""
-
-    clicked = pyqtSignal()
-
-    def mousePressEvent(self, event):
-        self.clicked.emit()
-        super().mousePressEvent(event)
-
-
-class HoverLogButton(QPushButton):
-    """A log button that reports pointer enter/leave without changing clicks."""
-
-    hover_entered = pyqtSignal()
-    hover_left = pyqtSignal()
-
-    def enterEvent(self, event):
-        self.hover_entered.emit()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self.hover_left.emit()
-        super().leaveEvent(event)
-
-
-class LiveLogPreview(QLabel):
-    """Tooltip-like live preview for the last few lines of one log file."""
-
-    def __init__(self, anchor, title, content_provider, parent=None):
-        super().__init__(parent, Qt.WindowType.ToolTip)
-        self.anchor = anchor
-        self.title = title
-        self.content_provider = content_provider
-        self.setTextFormat(Qt.TextFormat.PlainText)
-        self.setFont(QFont("Consolas", 9))
-        self.setMargin(9)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setStyleSheet(
-            "QLabel {"
-            " background: #171717; color: #e8e8e8;"
-            " border: 1px solid #5c5c5c; border-radius: 5px;"
-            " padding: 3px;"
-            "}"
-        )
-
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.setInterval(500)
-        self.refresh_timer.timeout.connect(self.refresh_content)
-
-    def show_preview(self):
-        self.refresh_content()
-        self._position_near_anchor()
-        self.show()
-        self.raise_()
-        self.refresh_timer.start()
-
-    def hide_preview(self):
-        self.refresh_timer.stop()
-        self.hide()
-
-    def refresh_content(self):
-        body = self.content_provider()
-        self.setText(f"{self.title}\n{'-' * 72}\n{body}")
-        self.adjustSize()
-        if self.isVisible():
-            self._position_near_anchor()
-
-    def _position_near_anchor(self):
-        anchor_pos = self.anchor.mapToGlobal(QPoint(0, self.anchor.height() + 5))
-        screen = QGuiApplication.screenAt(anchor_pos)
-        if screen is None:
-            screen = QGuiApplication.primaryScreen()
-
-        x = anchor_pos.x()
-        y = anchor_pos.y()
-        if screen is not None:
-            bounds = screen.availableGeometry()
-            x = min(max(x, bounds.left()), bounds.right() - self.width())
-            if y + self.height() > bounds.bottom():
-                y = self.anchor.mapToGlobal(QPoint(0, -self.height() - 5)).y()
-            y = min(max(y, bounds.top()), bounds.bottom() - self.height())
-        self.move(x, y)
-
-
-class AppControlWidget(QWidget):
-    """Compact launcher row with app identity, status, and actions."""
-
-    def __init__(self, manager, parent_menu):
-        super().__init__()
-        self.manager = manager
-        self.parent_menu = parent_menu
-
-        layout = QHBoxLayout()
-        layout.setContentsMargins(10, 5, 10, 5)
-        layout.setSpacing(10)
-
-        # App identity: full name plus a small managed root-PID subtitle.
-        self.name_container = QWidget(self)
-        self.name_container.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Preferred,
-        )
-        name_layout = QVBoxLayout(self.name_container)
-        name_layout.setContentsMargins(0, 0, 0, 0)
-        name_layout.setSpacing(1)
-
-        self.lbl_name = ClickableLabel(manager.name)
-        self.lbl_name.setTextFormat(Qt.TextFormat.PlainText)
-        name_font = self.lbl_name.font()
-        name_font.setBold(True)
-        self.lbl_name.setFont(name_font)
-        self.lbl_name.clicked.connect(self.on_name_clicked)
-        self.lbl_name.setToolTip(
-            f"{manager.name}\nClick to open application working directory"
-        )
-        name_minimum = self.lbl_name.fontMetrics().horizontalAdvance(manager.name) + 8
-        self.lbl_name.setMinimumWidth(name_minimum)
-        self.name_container.setMinimumWidth(name_minimum)
-
-        self.lbl_pid = QLabel("PID: -")
-        pid_font = self.lbl_pid.font()
-        if pid_font.pointSize() > 0:
-            pid_font.setPointSize(max(7, pid_font.pointSize() - 2))
-        self.lbl_pid.setFont(pid_font)
-        self.lbl_pid.setStyleSheet("color: #808080;")
-        name_layout.addWidget(self.lbl_name)
-        name_layout.addWidget(self.lbl_pid)
-
-        # Primary status: elapsed-only for running, terminal update time for stopped.
-        self.lbl_status = QLabel()
-        timestamp_width = self.lbl_status.fontMetrics().horizontalAdvance(
-            "2000-00-00 00:00:00"
-        )
-        self.lbl_status.setMinimumWidth(timestamp_width + 8)
-
-        self.btn_start = QPushButton("Start")
-        self.btn_start.setToolTip(f"Start {manager.name}")
-        self.btn_start.clicked.connect(self.on_start)
-
-        self.btn_stop = QPushButton("Stop")
-        self.btn_stop.setToolTip(f"Stop {manager.name}")
-        self.btn_stop.clicked.connect(self.on_stop)
-
-        # Hover remains available for active and historical stopped-run logs.
-        self.btn_ologs = HoverLogButton("O.Logs")
-        self.btn_ologs.setToolTip("Open output log; hover to preview")
-        self.btn_ologs.clicked.connect(self.manager.view_output_log)
-
-        self.btn_elogs = HoverLogButton("E.Logs")
-        self.btn_elogs.setToolTip("Open error log; hover to preview")
-        self.btn_elogs.clicked.connect(self.manager.view_error_log)
-
-        for button in (
-            self.btn_start,
-            self.btn_stop,
-            self.btn_ologs,
-            self.btn_elogs,
-        ):
-            self._fit_button_to_caption(button)
-
-        self.output_log_preview = LiveLogPreview(
-            self.btn_ologs,
-            f"{manager.name} - output log (last 7 lines)",
-            lambda: self.manager.read_log_tail("out"),
-            self,
-        )
-        self.error_log_preview = LiveLogPreview(
-            self.btn_elogs,
-            f"{manager.name} - error log (last 7 lines)",
-            lambda: self.manager.read_log_tail("err"),
-            self,
-        )
-        self.btn_ologs.hover_entered.connect(self.output_log_preview.show_preview)
-        self.btn_ologs.hover_left.connect(self.output_log_preview.hide_preview)
-        self.btn_elogs.hover_entered.connect(self.error_log_preview.show_preview)
-        self.btn_elogs.hover_left.connect(self.error_log_preview.hide_preview)
-
-        layout.addWidget(self.name_container)
-        layout.addWidget(self.lbl_status)
-        layout.addWidget(self.btn_start)
-        layout.addWidget(self.btn_stop)
-        layout.addWidget(self.btn_ologs)
-        layout.addWidget(self.btn_elogs)
-        layout.setStretch(0, 1)
-
-        self.setLayout(layout)
-        layout.activate()
-        self.setMinimumWidth(self.sizeHint().width())
-
-        # Timer update status UI realtime
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_ui)
-        self.timer.start(1000)
-
-        self.update_ui()
-
-    @staticmethod
-    def _fit_button_to_caption(button):
-        text_width = button.fontMetrics().horizontalAdvance(button.text()) + 24
-        button.setMinimumWidth(max(button.sizeHint().width(), text_width))
-
-    def update_ui(self):
-        status_info = self.manager.get_status_info()
-        status = status_info.get("status", "STOPPED")
-        presentation = self.manager.get_status_presentation(status_info)
-        self.lbl_status.setText(presentation["text"])
-        self.lbl_status.setStyleSheet(f"color: {presentation['color']};")
-        self.lbl_status.setToolTip(presentation["tooltip"])
-
-        pid_presentation = self.manager.get_pid_presentation(status_info)
-        self.lbl_pid.setText(pid_presentation["text"])
-        self.lbl_pid.setToolTip(pid_presentation["tooltip"])
-
-        multi_run = self.manager.app_config.get("multi_run", False)
-        controllable = status in {"STARTING", "RUNNING", "STOPPING"}
-        self.btn_stop.setEnabled(controllable)
-        self.btn_start.setEnabled(status == "STOPPED" or multi_run)
-
-    def on_start(self):
-        success, msg = self.manager.launch(manual=True, parent=self)
-        # Update immediately
-        self.update_ui()
-        # Do not close menu
-
-    def on_stop(self):
-        self.manager.stop_all()
-        self.update_ui()
-
-    def on_name_clicked(self):
-        """Open the same working directory used when launching the app."""
-        workdir = self.manager.get_workdir() or os.getcwd()
-        if os.path.exists(workdir):
-            if is_windows():
-                os.startfile(workdir)
-            else:
-                subprocess.Popen(["xdg-open", workdir])
-
-    def hideEvent(self, event):
-        self.output_log_preview.hide_preview()
-        self.error_log_preview.hide_preview()
-        super().hideEvent(event)
-
-
 class SystemTrayApp(QSystemTrayIcon):
-    def __init__(self, icon, parent=None, instance_lock=None):
+    def __init__(
+        self,
+        icon,
+        parent=None,
+        instance_lock=None,
+        config_path="setting.yaml",
+        launcher_argv=None,
+        log_preferences_path=None,
+    ):
         super().__init__(icon, parent)
+        self.config_path = str(Path(config_path).expanduser().resolve(strict=False))
+        preference_path = (
+            log_preferences_path
+            if log_preferences_path is not None
+            else default_log_preferences_path(self.config_path)
+        )
+        self.log_preference_store = LogPanelPreferenceStore(preference_path)
+        self.log_preference_owner = LogPreferenceOwner(self.log_preference_store)
+        if launcher_argv is None:
+            parsed = parse_launcher_args(sys.argv)
+            launcher_argv = (
+                parsed.qt_argv[0],
+                "--config",
+                self.config_path,
+                *parsed.qt_argv[1:],
+            )
+        self.launcher_argv = tuple(launcher_argv)
         self.managers = []
+        self.row_widgets = []
         self.controller = None
+        self.tool_service = AppToolService()
         self.startup_auto_start_suppressed_ids = set()
         self.instance_lock = instance_lock
         self._restart_requested = False
+        self._ui_shutdown = False
         self.load_config()
 
-        # Setup Menu
-        self.menu = QMenu()
-        self.refresh_menu()
-        self.setContextMenu(self.menu)
+        self.tray_panel = TrayPanelWindow()
+        self.log_popup = LogPopupWindow()
+        self.app_context_popup = AppContextPopup()
+        self.lifecycle_controller = LifecycleCommandController(parent=self)
+        self.pinned_logs = PinnedLogManager(
+            self.log_preference_owner,
+            placement_provider=self._pinned_log_placement,
+            parent=self,
+        )
+        self.log_controller = LogHoverController(
+            self.log_popup,
+            self.log_preference_owner,
+            placement_provider=self._log_popup_placement,
+            pin_handler=self._handle_log_pin,
+            is_pinned=self.pinned_logs.is_pinned,
+            parent=self,
+        )
+        self.pinned_logs.changed.connect(self._pinned_logs_changed)
+        self.lifecycle_controller.command_finished.connect(self._lifecycle_finished)
+        self.tray_panel.hidden.connect(self._tray_panel_hidden)
+        self.transient_ui = TransientUiController(
+            windows_provider=self._protected_windows,
+            dismiss_callback=self.hide_transient_ui,
+            parent=self,
+        )
+        self.rebuild_panel()
 
-        # Click handler (Left click -> Toast)
         self.activated.connect(self.on_tray_activated)
+        application = QApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self.shutdown_ui)
 
-        # Auto-start only after controller/session reconciliation and menu recovery.
         self.auto_start_timer = QTimer(self)
         self.auto_start_timer.setSingleShot(True)
         self.auto_start_timer.timeout.connect(self.auto_start_apps)
@@ -616,20 +495,17 @@ class SystemTrayApp(QSystemTrayIcon):
                 suppressed_ids.clear()
 
     def load_config(self):
-        # Initialize AppController
-        # It handles loading setting.yaml
-        self.controller = AppController("setting.yaml")
+        self.controller = AppController(self.config_path)
+        tool_service = getattr(self, "tool_service", None)
+        if tool_service is None:
+            tool_service = AppToolService()
+            self.tool_service = tool_service
 
-        # Get all apps
         apps = self.controller.list_apps()
-
         for app in apps:
-            # Check enabled
             if not app.get("enabled", True):
                 continue
 
-            # OS Filter
-            # Keep OS filtering logic as requested
             allowed_os = app.get("os")
             if allowed_os:
                 if isinstance(allowed_os, str):
@@ -638,97 +514,212 @@ class SystemTrayApp(QSystemTrayIcon):
 
                 is_visible = False
                 if is_windows():
-                    if any(
-                        x in ["win", "windows", "win10", "win11"] for x in allowed_os
-                    ):
-                        is_visible = True
+                    is_visible = any(
+                        x in ["win", "windows", "win10", "win11"]
+                        for x in allowed_os
+                    )
                 elif is_linux():
-                    if any(x in ["linux", "ubuntu", "debian"] for x in allowed_os):
-                        is_visible = True
-
+                    is_visible = any(
+                        x in ["linux", "ubuntu", "debian"] for x in allowed_os
+                    )
                 if not is_visible:
                     continue
 
-            # Create Manager wrapper
-            mgr = AppManager(
-                self.controller,
-                app["name"],
-                self.startup_auto_start_suppressed_ids,
-            )
-            self.managers.append(mgr)
-
-    def refresh_menu(self):
-        self.menu.clear()
-        self.menu.setMinimumWidth(0)
-        row_minimum_width = 0
-
-        # Header
-        header = QAction("Launcher Control Center", self.menu)
-        header.setEnabled(False)
-        self.menu.addAction(header)
-        self.menu.addSeparator()
-
-        # List Apps (Use QWidgetAction to embed custom widget)
-        if not self.managers:
-            empty_action = QAction("No apps configured", self.menu)
-            empty_action.setEnabled(False)
-            self.menu.addAction(empty_action)
-        else:
-            for mgr in self.managers:
-                action = QWidgetAction(self.menu)
-                widget = AppControlWidget(mgr, self.menu)
-                action.setDefaultWidget(widget)
-                self.menu.addAction(action)
-                row_minimum_width = max(
-                    row_minimum_width,
-                    widget.minimumWidth(),
-                    widget.sizeHint().width(),
+            self.managers.append(
+                AppManager(
+                    self.controller,
+                    app["name"],
+                    self.startup_auto_start_suppressed_ids,
+                    tool_service,
                 )
-
-        self.menu.addSeparator()
-
-        # Global Actions
-        refresh_action = QAction("Refresh Menu", self.menu)
-        refresh_action.triggered.connect(self.refresh_all)
-        self.menu.addAction(refresh_action)
-
-        stop_all_action = QAction("Stop All Apps", self.menu)
-        stop_all_action.triggered.connect(self.stop_all_apps)
-        self.menu.addAction(stop_all_action)
-
-        self.restart_action = QAction("Restart Launcher", self.menu)
-        self.restart_action.triggered.connect(self.restart_app)
-        self.menu.addAction(self.restart_action)
-
-        exit_action = QAction("Exit Launcher", self.menu)
-        exit_action.triggered.connect(self.exit_app)
-        self.menu.addAction(exit_action)
-
-        if row_minimum_width:
-            self.menu.setMinimumWidth(
-                max(self.menu.minimumSizeHint().width(), row_minimum_width + 8)
             )
+
+    def rebuild_panel(self):
+        self.log_controller.hide_popup()
+        for row in tuple(self.row_widgets):
+            row.shutdown()
+            row.deleteLater()
+        self.row_widgets = [
+            AppControlWidget(
+                manager,
+                parent=self.tray_panel.rows_container,
+                result_notifier=self.notify_app_tool_failure,
+                log_controller=self.log_controller,
+                lifecycle_controller=self.lifecycle_controller,
+            )
+            for manager in self.managers
+        ]
+        for row in self.row_widgets:
+            row.context_requested.connect(self.show_app_context)
+        if self.row_widgets:
+            rows = self.row_widgets
+        else:
+            empty = QLabel("No apps configured", self.tray_panel.rows_container)
+            empty.setContentsMargins(10, 8, 10, 8)
+            rows = [empty]
+        self.tray_panel.set_rows(rows)
+
+        self.tray_panel.clear_actions()
+        config_status = self.tool_service.file_status(self.config_path)
+        self.open_config_action = self.tray_panel.add_action(
+            "Open Config",
+            self.open_config,
+            enabled=config_status.ok,
+            tooltip=config_status.message,
+        )
+        self.stop_all_action = self.tray_panel.add_action(
+            "Stop All Apps",
+            self.stop_all_apps,
+        )
+        self.restart_action = self.tray_panel.add_action(
+            "Restart Launcher",
+            self.restart_app,
+        )
+        self.exit_action = self.tray_panel.add_action(
+            "Exit Launcher",
+            self.exit_app,
+        )
+
+    def _tray_anchor_and_screen(self):
+        anchor = self.geometry()
+        if anchor.isNull() or not anchor.isValid():
+            cursor = QCursor.pos()
+            anchor = QRect(cursor.x(), cursor.y(), 1, 1)
+        screen = QGuiApplication.screenAt(anchor.center()) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return anchor, QRect(anchor.x(), anchor.y(), 1, 1)
+        return anchor, screen.availableGeometry()
+
+    def _pinned_log_placement(self):
+        tray_rect = self.tray_panel.frameGeometry()
+        if tray_rect.isNull() or not tray_rect.isValid():
+            _anchor, available = self._tray_anchor_and_screen()
+            tray_rect = QRect(
+                available.right() - max(1, self.tray_panel.minimumWidth()) + 1,
+                available.bottom() - 260,
+                max(1, self.tray_panel.minimumWidth()),
+                240,
+            )
+        screen = (
+            QGuiApplication.screenAt(tray_rect.center())
+            or QGuiApplication.primaryScreen()
+        )
+        available = screen.availableGeometry() if screen is not None else tray_rect
+        return tray_rect, available
+
+    def _log_popup_placement(self):
+        tray_rect, available = self._pinned_log_placement()
+        return self.pinned_logs.transient_anchor_rect(tray_rect), available
+
+    def _protected_windows(self):
+        return (
+            self.tray_panel,
+            self.log_popup,
+            self.app_context_popup,
+            *self.pinned_logs.windows(),
+        )
+
+    def _tray_panel_hidden(self):
+        self.log_controller.hide_popup()
+        self.app_context_popup.hide()
+
+    def hide_transient_ui(self):
+        self.app_context_popup.hide()
+        self.log_controller.hide_popup()
+        self.tray_panel.hide()
+
+    def show_app_context(self, manager, global_pos):
+        status = manager.terminal_status()
+        self.app_context_popup.show_action(
+            global_pos,
+            text="Open terminal here",
+            callback=lambda current=manager: self._open_terminal(current),
+            enabled=status.ok,
+            tooltip=status.message,
+        )
+
+    def _open_terminal(self, manager):
+        result = manager.open_terminal()
+        if not result.ok:
+            self.showMessage(
+                "Open terminal failed",
+                f"{manager.name}: {result.message}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000,
+            )
+
+    def _handle_log_pin(self, target, stream, pinned, panel):
+        key = self.pinned_logs.key_for(target, stream)
+        if pinned:
+            self.pinned_logs.pin(
+                target,
+                stream,
+                line_count=panel.line_count.value(),
+                filter_expression=panel.filter_edit.text(),
+            )
+        else:
+            self.pinned_logs.unpin(key)
+        return True
+
+    def _pinned_logs_changed(self):
+        self.log_controller.refresh_pin_state()
+        self.log_controller.reposition_popup()
+
+    def _lifecycle_finished(self, app_id, ok, result):
+        for row in self.row_widgets:
+            if str(row.manager.app_id) == str(app_id):
+                row.update_ui()
+                break
+        if not ok:
+            message = str(result)
+            self.showMessage(
+                "Stop failed",
+                f"{app_id}: {message}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000,
+            )
+
+    def show_panel(self):
+        anchor, available = self._tray_anchor_and_screen()
+        for row in self.row_widgets:
+            row.update_ui()
+        self.tray_panel.show_at(
+            anchor,
+            available,
+            reserved_top_height=self.log_popup.reserved_height,
+        )
+        self.pinned_logs.ensure_visible_all()
+        self.log_controller.reposition_popup()
+
+    def toggle_panel(self):
+        if self.tray_panel.isVisible():
+            self.tray_panel.hide()
+        else:
+            self.show_panel()
 
     def refresh_all(self):
-        """Reload config and refresh menu."""
+        was_visible = self.tray_panel.isVisible()
+        self.tray_panel.hide()
         self.managers = []
         self.load_config()
-        self.refresh_menu()
+        self.rebuild_panel()
+        if was_visible:
+            self.show_panel()
 
     def on_tray_activated(self, reason):
-        # Trigger left click
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+        if reason == QSystemTrayIcon.ActivationReason.Context:
+            self.toggle_panel()
+        elif reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.show_toast()
 
     def show_toast(self):
-        # Build message from recovered registry status, not launcher-local memory.
         active_apps = []
         for mgr in self.managers:
             status_info = mgr.get_status_info()
             status = status_info.get("status", "STOPPED")
             if status != "STOPPED":
                 active_apps.append(
-                    f"• {mgr.name}: {mgr.get_status_text(status_info)}"
+                    f"? {mgr.name}: {mgr.get_status_text(status_info)}"
                 )
 
         if active_apps:
@@ -737,24 +728,56 @@ class SystemTrayApp(QSystemTrayIcon):
         else:
             title = "Launcher Idle"
             msg = "No applications are currently running."
-
         self.showMessage(title, msg, QSystemTrayIcon.MessageIcon.Information, 3000)
 
+    def open_config(self):
+        result = self.tool_service.open_file(self.config_path)
+        if not result.ok:
+            self.notify_launcher_tool_failure(result)
+
     def stop_all_apps(self):
+        lifecycle_controller = getattr(self, "lifecycle_controller", None)
+        if lifecycle_controller is not None:
+            return lifecycle_controller.request_stop_all(tuple(self.managers))
         if self.controller:
-            self.controller.stop_all()
+            return self.controller.stop_all()
+        return 0
+
+    def notify_launcher_tool_failure(self, result):
+        self.showMessage(
+            "Launcher action failed",
+            result.message,
+            QSystemTrayIcon.MessageIcon.Warning,
+            5000,
+        )
+
+    def notify_app_tool_failure(self, app_name, result):
+        self.showMessage(
+            "Open folder failed",
+            f"{app_name}: {result.message}",
+            QSystemTrayIcon.MessageIcon.Warning,
+            5000,
+        )
 
     def _capture_launcher_ui_activity(self):
-        snapshot = {"auto_start": None, "menu_timers": []}
+        snapshot = {"auto_start": None, "ui_timers": []}
         if hasattr(self, "auto_start_timer"):
             timer = self.auto_start_timer
             active = timer.isActive()
             remaining_ms = timer.remainingTime() if active else -1
             snapshot["auto_start"] = (timer, active, remaining_ms)
-        if hasattr(self, "menu"):
-            snapshot["menu_timers"] = [
-                (timer, timer.isActive()) for timer in self.menu.findChildren(QTimer)
-            ]
+
+        timers = []
+        if hasattr(self, "tray_panel"):
+            timers.extend(self.tray_panel.findChildren(QTimer))
+        if hasattr(self, "log_controller"):
+            timers.extend(self.log_controller.findChildren(QTimer))
+        if hasattr(self, "pinned_logs"):
+            timers.extend(self.pinned_logs.findChildren(QTimer))
+        unique = {id(timer): timer for timer in timers}
+        snapshot["ui_timers"] = [
+            (timer, timer.isActive()) for timer in unique.values()
+        ]
         return snapshot
 
     def _stop_launcher_ui_activity(self):
@@ -762,7 +785,7 @@ class SystemTrayApp(QSystemTrayIcon):
         auto_start = snapshot["auto_start"]
         if auto_start is not None:
             auto_start[0].stop()
-        for timer, _was_active in snapshot["menu_timers"]:
+        for timer, _was_active in snapshot["ui_timers"]:
             timer.stop()
         return snapshot
 
@@ -773,9 +796,46 @@ class SystemTrayApp(QSystemTrayIcon):
             timer, was_active, remaining_ms = auto_start
             if was_active:
                 timer.start(max(1, remaining_ms))
-        for timer, was_active in snapshot.get("menu_timers", []):
+        for timer, was_active in snapshot.get("ui_timers", []):
             if was_active:
                 timer.start()
+
+    def shutdown_ui(self):
+        if getattr(self, "_ui_shutdown", False):
+            return
+        self._ui_shutdown = True
+        auto_start = getattr(self, "auto_start_timer", None)
+        if auto_start is not None:
+            auto_start.stop()
+        transient = getattr(self, "transient_ui", None)
+        if transient is not None:
+            transient.shutdown()
+        for row in tuple(getattr(self, "row_widgets", ())):
+            row.shutdown()
+        lifecycle = getattr(self, "lifecycle_controller", None)
+        if lifecycle is not None:
+            lifecycle.shutdown()
+        controller = getattr(self, "log_controller", None)
+        if controller is not None:
+            controller.shutdown()
+        pinned = getattr(self, "pinned_logs", None)
+        if pinned is not None:
+            pinned.shutdown()
+        preferences = getattr(self, "log_preference_owner", None)
+        if preferences is not None:
+            preferences.shutdown()
+        context = getattr(self, "app_context_popup", None)
+        if context is not None:
+            context.hide()
+        popup = getattr(self, "log_popup", None)
+        if popup is not None:
+            popup.hide()
+        panel = getattr(self, "tray_panel", None)
+        if panel is not None:
+            panel.hide()
+
+    def _shutdown_log_controller(self):
+        self.shutdown_ui()
 
     def _spawn_replacement_launcher(self):
         project_root = os.path.dirname(os.path.abspath(__file__))
@@ -789,7 +849,8 @@ class SystemTrayApp(QSystemTrayIcon):
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         else:
             kwargs["start_new_session"] = True
-        return subprocess.Popen([sys.executable] + sys.argv, **kwargs)
+        launcher_argv = getattr(self, "launcher_argv", tuple(sys.argv))
+        return subprocess.Popen([sys.executable] + list(launcher_argv), **kwargs)
 
     def restart_app(self):
         if self._restart_requested:
@@ -826,15 +887,23 @@ class SystemTrayApp(QSystemTrayIcon):
             )
             return
 
+        SystemTrayApp.shutdown_ui(self)
         QApplication.quit()
 
     def exit_app(self):
         self._stop_launcher_ui_activity()
+        SystemTrayApp.shutdown_ui(self)
         QApplication.quit()
 
 
 def main():
-    app = QApplication(sys.argv)
+    try:
+        launcher_args = parse_launcher_args(sys.argv)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        return 2
+
+    app = QApplication(list(launcher_args.qt_argv))
     app.setQuitOnLastWindowClosed(
         False
     )  # Important: Do not exit when window is closed (since we have no window)
@@ -857,7 +926,12 @@ def main():
         # Fallback system icon
         icon = app.style().standardIcon(app.style().StandardPixmap.SP_ComputerIcon)
 
-    tray = SystemTrayApp(icon, instance_lock=instance_lock)
+    tray = SystemTrayApp(
+        icon,
+        instance_lock=instance_lock,
+        config_path=launcher_args.config_path,
+        launcher_argv=launcher_args.launcher_argv,
+    )
     tray.show()
 
     # Start Toast

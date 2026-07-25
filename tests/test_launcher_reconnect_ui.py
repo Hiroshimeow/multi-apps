@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import gc
 import subprocess
 import sys
 import tempfile
@@ -11,13 +12,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QMenu
+from PyQt6.QtCore import QCoreApplication, QEvent, Qt, QTimer
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from lib.core import AppController
 from lib.runtime.models import RunRecord
 from lib.runtime.process_identity import get_process_created_at
 from lib.session.subprocess_session import SubprocessSessionManager
+from lib.ui.log_reader import LogSnapshot, LogSnapshotState
 from multi import AppControlWidget, AppManager, SystemTrayApp
 
 
@@ -139,49 +141,6 @@ class RecoveredRuntimeInfoTests(unittest.TestCase):
                 handle.write("continued after reconnect\n")
             self.assertIn("continued after reconnect", manager.read_log_tail("out"))
 
-    def test_stopped_hover_preview_reads_newest_historical_run_logs(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            stdout_path = root / "history.out.log"
-            stderr_path = root / "history.err.log"
-            stdout_path.write_text("historical output tail\n", encoding="utf-8")
-            stderr_path.write_text("historical error tail\n", encoding="utf-8")
-
-            controller = MagicMock()
-            controller.config_manager.get_app.return_value = {
-                "id": "history",
-                "name": "History",
-                "multi_run": False,
-            }
-            controller.config_manager.get_log_dir.return_value = str(root)
-            controller.get_app_status.return_value = {
-                "status": "STOPPED",
-                "instances": 0,
-                "pid": 1234,
-                "last_used_time": "2026-07-12 10:04:05",
-                "stdout_path": str(stdout_path),
-                "stderr_path": str(stderr_path),
-            }
-            manager = AppManager(controller, "History")
-            menu = QMenu()
-            widget = AppControlWidget(manager, menu)
-            try:
-                self.assertIn(
-                    "historical output tail",
-                    widget.output_log_preview.content_provider(),
-                )
-                self.assertIn(
-                    "historical error tail",
-                    widget.error_log_preview.content_provider(),
-                )
-                self.assertTrue(widget.btn_ologs.isEnabled())
-                self.assertTrue(widget.btn_elogs.isEnabled())
-            finally:
-                widget.timer.stop()
-                widget.output_log_preview.hide_preview()
-                widget.error_log_preview.hide_preview()
-                widget.deleteLater()
-                menu.deleteLater()
 
 
 class AutoStartDecisionTests(unittest.TestCase):
@@ -238,10 +197,10 @@ class AutoStartDecisionTests(unittest.TestCase):
 
 
 class RecoveredUiStateTests(unittest.TestCase):
-    def _manager(self, status_info, multi_run=False, name="Demo"):
+    def _manager(self, status_info, multi_run=False, name="Demo", app_id="demo"):
         controller = MagicMock()
         controller.config_manager.get_app.return_value = {
-            "id": "demo",
+            "id": app_id,
             "name": name,
             "multi_run": multi_run,
         }
@@ -261,10 +220,36 @@ class RecoveredUiStateTests(unittest.TestCase):
 
     @staticmethod
     def _dispose_widget(widget):
-        widget.timer.stop()
-        widget.output_log_preview.hide_preview()
-        widget.error_log_preview.hide_preview()
+        widget.shutdown()
         widget.deleteLater()
+
+    @staticmethod
+    def _flush_deferred_deletes():
+        QApplication.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.processEvents()
+        gc.collect()
+
+
+    def test_widget_shutdown_stops_timer_and_is_idempotent(self):
+        host = QWidget()
+        widget = AppControlWidget(
+            self._manager({"status": "STOPPED", "instances": 0}),
+            host,
+        )
+        self.assertTrue(widget.timer.isActive())
+
+        widget.shutdown()
+        widget.shutdown()
+        QApplication.processEvents()
+
+        self.assertFalse(widget.timer.isActive())
+        self.assertFalse(hasattr(widget, "_app_context_menu"))
+        widget.deleteLater()
+        host.deleteLater()
+        self._flush_deferred_deletes()
+
+
 
     def test_running_primary_text_is_elapsed_only_green_and_instances_in_tooltip(self):
         single_info = {
@@ -402,8 +387,8 @@ class RecoveredUiStateTests(unittest.TestCase):
             },
             name=name,
         )
-        menu = QMenu()
-        widget = AppControlWidget(manager, menu)
+        host = QWidget()
+        widget = AppControlWidget(manager, host)
         try:
             self.assertEqual(widget.lbl_name.text(), name)
             self.assertEqual(widget.lbl_name.textFormat(), Qt.TextFormat.PlainText)
@@ -413,11 +398,12 @@ class RecoveredUiStateTests(unittest.TestCase):
             expected_name_width = (
                 widget.lbl_name.fontMetrics().horizontalAdvance(name) + 8
             )
-            self.assertGreaterEqual(
+            self.assertLess(
                 widget.name_container.minimumWidth(),
                 expected_name_width,
             )
-            self.assertEqual(widget.layout().stretch(0), 1)
+            self.assertGreaterEqual(widget.name_container.minimumWidth(), 96)
+            self.assertEqual(widget.top_row.layout().stretch(0), 1)
             self.assertEqual(widget.lbl_pid.text(), "PID: 2468")
             if widget.lbl_name.font().pointSize() > 0:
                 self.assertLess(
@@ -439,38 +425,15 @@ class RecoveredUiStateTests(unittest.TestCase):
             self.assertGreaterEqual(widget.minimumWidth(), widget.sizeHint().width())
         finally:
             self._dispose_widget(widget)
-            menu.deleteLater()
+            host.deleteLater()
 
-    def test_menu_minimum_width_tracks_embedded_row_size_hint(self):
-        manager = self._manager(
-            {"status": "STOPPED", "instances": 0},
-            name="Long application name for menu sizing",
-        )
-        menu = QMenu()
-        tray = SimpleNamespace(
-            menu=menu,
-            managers=[manager],
-            refresh_all=lambda: None,
-            stop_all_apps=lambda: None,
-            restart_app=lambda: None,
-            exit_app=lambda: None,
-        )
-        try:
-            SystemTrayApp.refresh_menu(tray)
-            row_action = next(
-                action
-                for action in menu.actions()
-                if hasattr(action, "defaultWidget") and action.defaultWidget() is not None
-            )
-            row_widget = row_action.defaultWidget()
-            self.assertGreaterEqual(
-                menu.minimumWidth(),
-                row_widget.minimumWidth() + 8,
-            )
-        finally:
-            for widget in menu.findChildren(AppControlWidget):
-                self._dispose_widget(widget)
-            menu.deleteLater()
+
+
+
+
+
+
+
 
 
 class LauncherLifecycleTests(unittest.TestCase):
@@ -554,12 +517,14 @@ class LauncherLifecycleTests(unittest.TestCase):
         status = self.FakeTimer("status", True, events)
         hover = self.FakeTimer("hover", True, events)
         lock = self.FakeLock(events)
-        menu = SimpleNamespace(findChildren=lambda timer_type: [status, hover])
+        tray_panel = SimpleNamespace(findChildren=lambda timer_type: [status])
+        log_controller = SimpleNamespace(findChildren=lambda timer_type: [hover])
         tray = SimpleNamespace(
             _restart_requested=False,
             restart_action=MagicMock(),
             auto_start_timer=auto_start,
-            menu=menu,
+            tray_panel=tray_panel,
+            log_controller=log_controller,
             instance_lock=lock,
             _spawn_replacement_launcher=MagicMock(
                 side_effect=OSError("spawn failed")
@@ -604,12 +569,14 @@ class LauncherLifecycleTests(unittest.TestCase):
         status = self.FakeTimer("status", True, events)
         hidden_hover = self.FakeTimer("hover", False, events)
         lock = self.FakeLock(events)
-        menu = SimpleNamespace(findChildren=lambda timer_type: [status, hidden_hover])
+        tray_panel = SimpleNamespace(findChildren=lambda timer_type: [status])
+        log_controller = SimpleNamespace(findChildren=lambda timer_type: [hidden_hover])
         tray = SimpleNamespace(
             _restart_requested=False,
             restart_action=MagicMock(),
             auto_start_timer=auto_start,
-            menu=menu,
+            tray_panel=tray_panel,
+            log_controller=log_controller,
             instance_lock=lock,
             _spawn_replacement_launcher=MagicMock(
                 side_effect=OSError("spawn failed")
@@ -702,6 +669,76 @@ class LauncherLifecycleTests(unittest.TestCase):
         tray = SimpleNamespace(controller=controller)
         SystemTrayApp.stop_all_apps(tray)
         controller.stop_all.assert_called_once_with()
+
+
+class AppManagerStructuredLogTests(unittest.TestCase):
+    def _manager(self, root, status=None, log_reader=None):
+        controller = MagicMock()
+        controller.config_manager.get_app.return_value = {"id": "demo", "name": "Demo"}
+        controller.config_manager.get_log_dir.return_value = str(Path(root) / "logs")
+        controller.get_app_status.return_value = status or {"status": "STOPPED"}
+        return AppManager(controller, "Demo", tool_service=MagicMock(), log_reader=log_reader)
+
+    def test_injected_reader_receives_exact_selected_path_and_bounds(self):
+        with tempfile.TemporaryDirectory() as root:
+            selected = Path(root) / "active.out.log"
+            reader = MagicMock()
+            expected = LogSnapshot(str(selected.resolve()), LogSnapshotState.READY, ("line",), 4)
+            reader.read.return_value = expected
+            manager = self._manager(root, {"status": "RUNNING", "stdout_path": str(selected)}, reader)
+
+            actual = manager.get_log_snapshot("out", max_lines=123, max_bytes=4096)
+
+            self.assertIs(actual, expected)
+            reader.read.assert_called_once_with(str(selected.resolve()), max_lines=123, max_bytes=4096)
+
+    def test_historical_path_and_legacy_fallback_are_unchanged(self):
+        with tempfile.TemporaryDirectory() as root:
+            historical = Path(root) / "history.err.log"
+            manager = self._manager(root, {"status": "STOPPED", "stderr_path": str(historical)})
+            self.assertEqual(manager.get_log_path("err"), str(historical.resolve()))
+            fallback = self._manager(root)
+            self.assertEqual(fallback.get_log_path("out"), str(Path(root) / "logs" / "Demo.out.log"))
+
+    def test_compatibility_wrapper_formats_states(self):
+        with tempfile.TemporaryDirectory() as root:
+            reader = MagicMock()
+            manager = self._manager(root, log_reader=reader)
+            path = str((Path(root) / "x.log").resolve())
+            cases = [
+                (LogSnapshot(path, LogSnapshotState.MISSING), "[output log does not exist]"),
+                (LogSnapshot(path, LogSnapshotState.EMPTY), "[output log is empty]"),
+                (LogSnapshot(path, LogSnapshotState.UNREADABLE, error="PermissionError: denied"), "[cannot read output log: PermissionError: denied]"),
+            ]
+            for snapshot, expected in cases:
+                with self.subTest(state=snapshot.state):
+                    reader.read.return_value = snapshot
+                    self.assertEqual(manager.read_log_tail("out"), expected)
+
+    def test_compatibility_wrapper_keeps_seven_newest_lines_and_presentation_rules(self):
+        with tempfile.TemporaryDirectory() as root:
+            reader = MagicMock()
+            lines = tuple([f"old-{i}" for i in range(3)] + ["tab\there"] + [f"new-{i}" for i in range(6)] + ["x" * 230])
+            path = str((Path(root) / "x.log").resolve())
+            reader.read.return_value = LogSnapshot(path, LogSnapshotState.READY, lines, 999)
+            manager = self._manager(root, log_reader=reader)
+
+            rendered = manager.read_log_tail("out")
+
+            reader.read.assert_called_once_with(manager.get_log_path("out"), max_lines=7, max_bytes=65536)
+            shown = rendered.splitlines()
+            self.assertEqual(len(shown), 7)
+            self.assertNotIn("old-0", rendered)
+            self.assertTrue(shown[-1].endswith("..."))
+            self.assertLessEqual(len(shown[-1]), 220)
+
+    def test_tab_replacement_is_preserved(self):
+        with tempfile.TemporaryDirectory() as root:
+            reader = MagicMock()
+            path = str((Path(root) / "x.log").resolve())
+            reader.read.return_value = LogSnapshot(path, LogSnapshotState.READY, ("a\tb",), 3)
+            manager = self._manager(root, log_reader=reader)
+            self.assertEqual(manager.read_log_tail("err"), "a    b")
 
 
 if __name__ == "__main__":

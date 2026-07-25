@@ -1,6 +1,7 @@
 # Multi-Run Apps
 
 `multi-run-apps` là control panel và process registry để chạy nhiều ứng dụng cục bộ từ System Tray trên Windows hoặc từ CLI/TUI trên Linux.
+<img width="648" height="520" alt="{726DBEEE-F798-435E-B871-A29D4FB4F918}" src="https://github.com/user-attachments/assets/ae9943b5-945a-4caf-9155-ad5fce6b9c9b" />
 
 Launcher không quyết định vòng đời của ứng dụng chỉ vì cửa sổ launcher đang mở. Mỗi lần Start trong chế độ `subprocess` tạo một supervisor riêng cho run đó. Supervisor giữ process tree, IPC và log handles; launcher có thể Restart, Exit hoặc bị đóng mà ứng dụng vẫn tiếp tục chạy.
 
@@ -24,12 +25,12 @@ Khi launcher mở lại, nó đọc runtime registry và reconnect tới các su
 - thời điểm bắt đầu dùng để tính uptime;
 - đường dẫn stdout/stderr log.
 
-Tray hiển thị trạng thái đã khôi phục ngay khi khởi động, không cần bấm Refresh Menu.
+Tray hiển thị trạng thái đã khôi phục ngay khi khởi động, không cần thao tác reload thủ công.
 
 ### Stop và Stop All Apps
 
-- **Stop** là thao tác chủ động cho một app.
-- **Stop All Apps** là thao tác chủ động cho toàn bộ app enabled trong config hiện tại.
+- **Stop** là thao tác chủ động cho một app. Lệnh stop chạy trong background command worker nên Qt UI vẫn phản hồi.
+- **Stop All Apps** gửi từng app vào cùng worker, loại bỏ request trùng theo app ID và không block GUI thread.
 - Stop thử graceful shutdown trước, chờ tối đa `close_timeout`, sau đó force-close complete process tree nếu cần.
 - Supervisor xác minh PID cùng process creation time; không kill process chỉ dựa trên PID.
 - Log cuối cùng vẫn được giữ lại sau khi run dừng.
@@ -125,6 +126,19 @@ uv run main.py --repo E:/python_project --port 8000
 
 Các path tương đối được resolve từ thư mục chứa file config.
 
+## Thao tác trong tray
+
+Chuột phải icon tray mở `TrayPanelWindow`, một cửa sổ Qt độc lập thay vì nhét widget tương tác vào `QMenu`. Tray panel được đặt sát mép phải của usable screen đang chứa tray icon.
+
+- nhấp trái tên app để mở working directory của app;
+- nhấp phải tên app, phím Menu hoặc `Shift+F10` mở popup riêng có **Open terminal here**;
+- terminal được khởi chạy với `cwd` đúng working directory của app, không thay đổi working directory toàn cục của launcher;
+- **Open Config** mở đúng file YAML mà launcher hiện tại đang dùng;
+- **Stop All Apps**, **Restart Launcher** và **Exit Launcher** giữ nguyên chức năng tương ứng;
+- phím `Escape` ẩn tray panel.
+
+Click bên ngoài tray panel, hover-log popup và app-context popup sẽ ẩn toàn bộ UI transient. Click bên trong label, row, filter, log text, scrollbar hoặc app-context popup không làm tray panel tự đóng. Các cửa sổ log đã **PIN** không bị đóng bởi outside click.
+
 ### Cách viết `args`
 
 ```yaml
@@ -192,7 +206,38 @@ logs/<app_id>/<run_id>.out.log
 logs/<app_id>/<run_id>.err.log
 ```
 
-Supervisor giữ log handles, vì vậy log tiếp tục được ghi khi launcher Restart, Exit hoặc crash. Tray dùng run active mới nhất làm log target; khi không còn run active, nó dùng historical run mới nhất. Hover trên **O.Logs** hoặc **E.Logs** hiển thị tail đang cập nhật của cùng file.
+Supervisor giữ log handles, vì vậy log tiếp tục được ghi khi launcher Restart, Exit hoặc crash. Tray dùng run active mới nhất làm log target; khi không còn run active, nó dùng historical run mới nhất.
+
+## Inline live logs
+
+Hover trên **O.Logs** hoặc **E.Logs** mở một popup độc lập tại vị trí cố định ngay phía trên tray panel. Tray panel và transient log popup đều nằm sát mép phải của usable screen. `LogPopupWindow` là top-level window riêng và chỉ sở hữu một `InlineLogPanel`, bất kể config có bao nhiêu app. Việc mở, chuyển stream hoặc ẩn popup không thay đổi geometry của tray panel và không rebuild app rows. Nhấp nút vẫn mở file log bằng ứng dụng mặc định.
+
+Flow hiển thị được tách thành các block:
+
+```text
+HoverLogButton
+-> LogHoverController (debounce 80 ms, ownership, lifecycle)
+-> LatestLogReader (background thread, latest-wins)
+-> LogPopupWindow
+-> InlineLogPanel (render/filter/scroll only)
+```
+
+Mọi thao tác path và file I/O chạy trong worker. Khi rê nhanh qua nhiều nút, pending request cũ bị thay thế và snapshot stale bị bỏ qua. Khi chuyển target, popup giữ nội dung hiện tại với trạng thái `Loading…`, sau đó thay document đúng một lần khi snapshot mới về. Chu kỳ refresh live là 500 ms.
+
+Popup có các điều khiển:
+
+- stream `stdout` hoặc `stderr` theo nút đang hover;
+- **Lines** mặc định **100 dòng**, cho phép **10–5000**;
+- **Filter** dùng các term literal, không phải regex và không render HTML;
+- **PIN** tạo một native live-log tool window độc lập. Nhấn **UNPIN** hoặc nút Close native trên chính window đó để bỏ ghim đúng app/stream.
+
+Pinned logs tiếp tục refresh mỗi 500 ms ngay cả khi tray panel đã ẩn và không bị outside click đóng. Mỗi pinned window có thể move và resize tự do bằng title bar và viền native của hệ điều hành. Vị trí mặc định của pin mới ưu tiên sát mép phải để các pin không chồng lên nhau khi còn đủ chỗ; launcher không tự động reset geometry đã được người dùng điều chỉnh khi mở lại tray, refresh config, pin thêm hoặc unpin window khác. Chỉ window bị mất hoàn toàn khỏi các usable screen mới được đưa trở lại vùng nhìn thấy. Pinned geometry chỉ tồn tại trong phiên launcher hiện tại; filter, line count và stream vẫn dùng preference hiện có. Pinned logs dùng chung một background reader có pending request riêng theo `(app_id, stream)`, không tạo một worker thread cho mỗi window.
+
+Filter có thể viết `alpha,beta,!drop-me` hoặc `[alpha,beta,!drop-me]`. Dòng được giữ khi chứa ít nhất một positive term; term có tiền tố `!` loại dòng. Positive term được highlight trên nguyên văn log. Dấu phẩy bên trong term không được hỗ trợ.
+
+Khi viewport đang ở cuối, log mới tự follow và trạng thái là `Live`. Cuộn lên sẽ giữ vị trí đọc và đổi trạng thái thành `Live paused while scrolled`; cuộn về cuối tự tiếp tục follow. Selection, caret và kết quả copy được giữ qua append tương thích.
+
+Mỗi app lưu riêng line count, filter và stream gần nhất trong `.runtime/ui-log-preferences.json` nằm cạnh file config. File này được ghi atomic. Config thiếu/hỏng dùng default; lỗi đọc I/O không được phép ghi đè preference hợp lệ đang có.
 
 ## Cài đặt và chạy
 
