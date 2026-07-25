@@ -194,16 +194,17 @@ class AppManager:
     def startup_auto_start_suppressed(self):
         return self.app_id in self._startup_auto_start_suppressed_ids
 
-    def can_start_manually(self):
+    def can_start_manually(self, status_info=None):
         if self.app_config.get("multi_run", False):
             return True
-        return self.get_status_info().get("status", "STOPPED") == "STOPPED"
+        status_info = status_info or self.get_status_info()
+        return status_info.get("status", "STOPPED") == "STOPPED"
 
-    def launch(self, *, manual=False, parent=None):
+    def launch(self, *, manual=False, parent=None, status_info=None):
         """Start without blocking Qt; edit args only for a manual GUI request."""
         args_override = None
         if manual:
-            if not self.can_start_manually():
+            if not self.can_start_manually(status_info):
                 return False, "Start is blocked by an active or orphaned run"
             if self.app_config.get("args_edit", False):
                 # Dequeue this app from the one-shot startup auto-start before
@@ -456,6 +457,7 @@ class SystemTrayApp(QSystemTrayIcon):
             parent=self,
         )
         self.pinned_logs.changed.connect(self._pinned_logs_changed)
+        self.log_controller.viewer_closed.connect(self._log_viewer_closed)
         self.lifecycle_controller.command_finished.connect(self._lifecycle_finished)
         self.tray_panel.hidden.connect(self._tray_panel_hidden)
         self.transient_ui = TransientUiController(
@@ -551,6 +553,7 @@ class SystemTrayApp(QSystemTrayIcon):
         ]
         for row in self.row_widgets:
             row.context_requested.connect(self.show_app_context)
+            row.refresh_requested.connect(self._row_refresh_requested)
         if self.row_widgets:
             rows = self.row_widgets
         else:
@@ -622,11 +625,15 @@ class SystemTrayApp(QSystemTrayIcon):
     def _tray_panel_hidden(self):
         self.log_controller.hide_popup()
         self.app_context_popup.hide()
+        self._release_idle_log_preferences()
+        self._sync_transient_activity()
 
     def hide_transient_ui(self):
         self.app_context_popup.hide()
         self.log_controller.hide_popup()
         self.tray_panel.hide()
+        self._release_idle_log_preferences()
+        self._sync_transient_activity()
 
     def show_app_context(self, manager, global_pos):
         status = manager.terminal_status()
@@ -637,6 +644,7 @@ class SystemTrayApp(QSystemTrayIcon):
             enabled=status.ok,
             tooltip=status.message,
         )
+        self._sync_transient_activity()
 
     def _open_terminal(self, manager):
         result = manager.open_terminal()
@@ -659,17 +667,21 @@ class SystemTrayApp(QSystemTrayIcon):
             )
         else:
             self.pinned_logs.unpin(key)
+        self._sync_transient_activity()
         return True
 
     def _pinned_logs_changed(self):
         self.log_controller.refresh_pin_state()
         self.log_controller.reposition_popup()
+        self._release_idle_log_preferences()
+        self._sync_transient_activity()
+
+    def _log_viewer_closed(self):
+        self._release_idle_log_preferences()
+        self._sync_transient_activity()
 
     def _lifecycle_finished(self, app_id, ok, result):
-        for row in self.row_widgets:
-            if str(row.manager.app_id) == str(app_id):
-                row.update_ui()
-                break
+        self.refresh_status_snapshot((str(app_id),))
         if not ok:
             message = str(result)
             self.showMessage(
@@ -679,10 +691,41 @@ class SystemTrayApp(QSystemTrayIcon):
                 5000,
             )
 
+    def _row_refresh_requested(self, app_id):
+        self.refresh_status_snapshot((str(app_id),))
+
+    def refresh_status_snapshot(self, app_ids=None):
+        requested = tuple(
+            str(value)
+            for value in (
+                app_ids
+                if app_ids is not None
+                else (manager.app_id for manager in self.managers)
+            )
+        )
+        snapshot = self.controller.get_status_snapshot(requested)
+        requested_set = set(requested)
+        for row in self.row_widgets:
+            app_id = str(row.manager.app_id)
+            if app_ids is None or app_id in requested_set:
+                row.apply_status(
+                    snapshot.get(app_id, {"status": "STOPPED", "instances": 0})
+                )
+        return snapshot
+
+    def _release_idle_log_preferences(self):
+        if self.log_popup.isVisible() or self.pinned_logs.count():
+            return
+        self.log_preference_owner.shutdown()
+
+    def _sync_transient_activity(self):
+        transient = getattr(self, "transient_ui", None)
+        if transient is not None:
+            transient.sync_activity()
+
     def show_panel(self):
         anchor, available = self._tray_anchor_and_screen()
-        for row in self.row_widgets:
-            row.update_ui()
+        self.refresh_status_snapshot()
         self.tray_panel.show_at(
             anchor,
             available,
@@ -690,6 +733,7 @@ class SystemTrayApp(QSystemTrayIcon):
         )
         self.pinned_logs.ensure_visible_all()
         self.log_controller.reposition_popup()
+        self._sync_transient_activity()
 
     def toggle_panel(self):
         if self.tray_panel.isVisible():
@@ -714,8 +758,14 @@ class SystemTrayApp(QSystemTrayIcon):
 
     def show_toast(self):
         active_apps = []
+        snapshot = self.controller.get_status_snapshot(
+            tuple(manager.app_id for manager in self.managers)
+        )
         for mgr in self.managers:
-            status_info = mgr.get_status_info()
+            status_info = snapshot.get(
+                mgr.app_id,
+                {"status": "STOPPED", "instances": 0},
+            )
             status = status_info.get("status", "STOPPED")
             if status != "STOPPED":
                 active_apps.append(

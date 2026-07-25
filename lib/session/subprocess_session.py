@@ -317,12 +317,39 @@ class SubprocessSessionManager(BaseSessionManager):
     def is_running(self, app_name):
         return bool(self._active_records(app_name))
 
-    def get_info(self, app_name):
+    def get_status_snapshot(self, app_ids):
+        requested = tuple(dict.fromkeys(str(value) for value in app_ids))
+        snapshot = {
+            app_id: {"status": "STOPPED", "instances": 0}
+            for app_id in requested
+        }
+        if not requested:
+            return snapshot
+
         self.client.reap_finished()
-        app_records = self._refresh_dead_active_records(app_name)
+        grouped = {app_id: [] for app_id in requested}
+        candidate_to_requested = {}
+        for app_id in requested:
+            for candidate in {app_id, slugify_app_id(app_id)}:
+                candidate_to_requested.setdefault(candidate, []).append(app_id)
+        for record in self.registry.list_records():
+            for app_id in candidate_to_requested.get(record.app_id, ()):
+                grouped[app_id].append(record)
+
+        for app_id, records in grouped.items():
+            snapshot[app_id] = self._status_from_records(
+                self._refresh_dead_records(records)
+            )
+        return snapshot
+
+    def get_info(self, app_name):
+        app_name = str(app_name)
+        return self.get_status_snapshot((app_name,))[app_name]
+
+    def _status_from_records(self, app_records):
         records = [record for record in app_records if record.state in ACTIVE_STATES]
         if records:
-            newest = max(records, key=lambda item: item.created_at)
+            newest = max(records, key=lambda item: (item.created_at, item.run_id))
             status = {
                 "starting": "STARTING",
                 "running": "RUNNING",
@@ -332,11 +359,11 @@ class SubprocessSessionManager(BaseSessionManager):
 
         orphaned = [record for record in app_records if record.state == "orphaned"]
         if orphaned:
-            newest = max(orphaned, key=lambda item: item.created_at)
+            newest = max(orphaned, key=lambda item: (item.created_at, item.run_id))
             return self._run_info_payload(newest, "ORPHANED", len(orphaned))
 
         if app_records:
-            newest = max(app_records, key=lambda item: item.created_at)
+            newest = max(app_records, key=lambda item: (item.created_at, item.run_id))
             return self._run_info_payload(newest, "STOPPED", 0)
         return {"status": "STOPPED", "instances": 0}
 
@@ -458,8 +485,11 @@ class SubprocessSessionManager(BaseSessionManager):
         return updated if updated is not None else record
 
     def _refresh_dead_active_records(self, app_name):
+        return self._refresh_dead_records(self._records_for(app_name))
+
+    def _refresh_dead_records(self, records):
         refreshed = []
-        for record in self._records_for(app_name):
+        for record in records:
             if record.state == "orphaned":
                 keeper_alive, root_alive = self._record_processes_alive(record)
                 if keeper_alive or root_alive:

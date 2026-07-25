@@ -81,8 +81,11 @@ class TrayUiArchitectureTests(unittest.TestCase):
         self.assertIsInstance(self.tray.tray_panel, TrayPanelWindow)
         self.assertIsInstance(self.tray.log_popup, LogPopupWindow)
         self.assertIsInstance(self.tray.log_controller, LogHoverController)
-        self.assertTrue(self.tray.lifecycle_controller.is_alive())
-        self.assertTrue(self.tray.pinned_logs.reader.is_alive())
+        self.assertFalse(self.tray.lifecycle_controller.is_alive())
+        self.assertIsNone(self.tray.log_controller.reader)
+        self.assertIsNone(self.tray.pinned_logs.reader)
+        self.assertFalse(self.tray.log_preference_owner.is_alive())
+        self.assertFalse(self.tray.transient_ui.pointer_timer.isActive())
         self.assertFalse(hasattr(self.tray, "menu"))
 
         rows = self.tray.tray_panel.findChildren(AppControlWidget)
@@ -113,7 +116,7 @@ class TrayUiArchitectureTests(unittest.TestCase):
     def test_one_hundred_rebuilds_keep_one_controller_popup_and_live_row_set(self):
         controller = self.tray.log_controller
         popup = self.tray.log_popup
-        reader_thread = controller.reader._thread
+        self.assertIsNone(controller.reader)
         previous_rows = tuple(self.tray.row_widgets)
 
         for _ in range(100):
@@ -122,11 +125,10 @@ class TrayUiArchitectureTests(unittest.TestCase):
 
         self.assertIs(self.tray.log_controller, controller)
         self.assertIs(self.tray.log_popup, popup)
-        self.assertIs(controller.reader._thread, reader_thread)
-        self.assertTrue(controller.reader.is_alive())
+        self.assertIsNone(controller.reader)
         self.assertEqual(len(self.tray.row_widgets), 1)
-        self.assertTrue(all(row.timer.isActive() for row in self.tray.row_widgets))
-        self.assertTrue(all(not row.timer.isActive() for row in previous_rows))
+        self.assertTrue(all(not hasattr(row, "timer") for row in self.tray.row_widgets))
+        self.assertTrue(all(not hasattr(row, "timer") for row in previous_rows))
         self.assertEqual(
             len(self.tray.log_popup.findChildren(type(self.tray.log_popup.panel))),
             1,
@@ -143,10 +145,11 @@ class TrayUiArchitectureTests(unittest.TestCase):
 
         self.assertFalse(self.tray.tray_panel.isVisible())
         self.assertFalse(self.tray.log_popup.isVisible())
-        self.assertFalse(self.tray.log_controller.reader.is_alive())
+        self.assertIsNone(self.tray.log_controller.reader)
         self.assertFalse(self.tray.lifecycle_controller.is_alive())
-        self.assertFalse(self.tray.pinned_logs.reader.is_alive())
-        self.assertTrue(all(not row.timer.isActive() for row in rows))
+        self.assertIsNone(self.tray.pinned_logs.reader)
+        self.assertFalse(self.tray.log_preference_owner.is_alive())
+        self.assertTrue(all(not hasattr(row, "timer") for row in rows))
 
     def test_context_activation_toggles_panel_and_internal_click_does_not_hide(self):
         reason = self.tray.ActivationReason.Context

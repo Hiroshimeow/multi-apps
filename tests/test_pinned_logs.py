@@ -284,7 +284,7 @@ class PinnedLogManagerTests(unittest.TestCase):
                 )
             finally:
                 manager.shutdown()
-            self.assertFalse(manager.reader.is_alive())
+            self.assertIsNone(manager.reader)
 
     def test_multiple_pinned_logs_stack_without_overlap_stay_live_and_unpin_independently(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -323,7 +323,7 @@ class PinnedLogManagerTests(unittest.TestCase):
                 self.assertTrue(second_window.isVisible())
             finally:
                 manager.shutdown()
-            self.assertFalse(manager.reader.is_alive())
+            self.assertIsNone(manager.reader)
 
 
 if __name__ == "__main__":

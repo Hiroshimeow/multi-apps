@@ -42,15 +42,13 @@ class TransientUiController(QObject):
         self._dismiss_scheduled = False
         self.buttons_provider = buttons_provider or _default_buttons_provider
         self.cursor_provider = cursor_provider or QCursor.pos
-        self._button_down = self.buttons_provider() != Qt.MouseButton.NoButton
+        self._button_down = False
+        self._monitoring_active = False
         self.pointer_timer = QTimer(self)
         self.pointer_timer.setInterval(max(8, int(poll_interval_ms)))
         self.pointer_timer.timeout.connect(self._poll_global_pointer)
-        self.pointer_timer.start()
-        application = QApplication.instance()
-        self.application = application
-        if application is not None:
-            application.installEventFilter(self)
+        self.application = QApplication.instance()
+        self.sync_activity()
 
     def _windows(self):
         return tuple(
@@ -58,6 +56,24 @@ class TransientUiController(QObject):
             for window in self.windows_provider()
             if window is not None and window.isVisible()
         )
+
+    def sync_activity(self):
+        if self._shutdown:
+            return False
+        should_monitor = bool(self._windows())
+        if should_monitor and not self._monitoring_active:
+            self._monitoring_active = True
+            self._button_down = self.buttons_provider() != Qt.MouseButton.NoButton
+            if self.application is not None:
+                self.application.installEventFilter(self)
+            self.pointer_timer.start()
+        elif not should_monitor and self._monitoring_active:
+            self.pointer_timer.stop()
+            if self.application is not None:
+                self.application.removeEventFilter(self)
+            self._monitoring_active = False
+            self._button_down = False
+        return self._monitoring_active
 
     def _belongs_to_window(self, watched, window):
         if watched is window:
@@ -81,7 +97,8 @@ class TransientUiController(QObject):
         return QCursor.pos()
 
     def _poll_global_pointer(self):
-        if self._shutdown:
+        if self._shutdown or not self._windows():
+            self.sync_activity()
             return
         down = self.buttons_provider() != Qt.MouseButton.NoButton
         if down and not self._button_down:
@@ -98,6 +115,7 @@ class TransientUiController(QObject):
         if self._shutdown:
             return
         self.dismiss_callback()
+        self.sync_activity()
 
     def _schedule_deactivation_check(self):
         if self._shutdown or self._dismiss_scheduled:
@@ -146,8 +164,9 @@ class TransientUiController(QObject):
             return
         self._shutdown = True
         self.pointer_timer.stop()
-        if self.application is not None:
+        if self._monitoring_active and self.application is not None:
             self.application.removeEventFilter(self)
+        self._monitoring_active = False
 
 
 __all__ = ["TransientUiController"]

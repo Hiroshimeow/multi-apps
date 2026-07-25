@@ -143,11 +143,16 @@ class ArgsEditCallerTests(unittest.TestCase):
         manager.launch.return_value = (True, "Started")
         widget = MagicMock()
         widget.manager = manager
+        widget._status_info = {"status": "STOPPED", "instances": 0}
 
         AppControlWidget.on_start(widget)
 
-        manager.launch.assert_called_once_with(manual=True, parent=widget)
-        widget.update_ui.assert_called_once_with()
+        manager.launch.assert_called_once_with(
+            manual=True,
+            parent=widget,
+            status_info=widget._status_info,
+        )
+        widget.refresh_requested.emit.assert_called_once_with(str(manager.app_id))
 
     def test_manual_gui_accept_passes_one_run_override_non_blocking(self):
         manager, controller, _app = self._manager()

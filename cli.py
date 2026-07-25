@@ -32,9 +32,11 @@ def main():
         return
 
     if args.command == "status":
-        # Simple CLI status
-        for app in controller.list_apps():
-            status = controller.get_app_status(app['name'])
+        apps = controller.list_apps()
+        app_ids = tuple(str(app.get("id") or app["name"]) for app in apps)
+        snapshot = controller.get_status_snapshot(app_ids)
+        for app, app_id in zip(apps, app_ids):
+            status = snapshot.get(app_id, {"status": "STOPPED", "instances": 0})
             print(f"{app['name']}: {status.get('status', 'UNKNOWN')} {status.get('session', '')}")
         return
 

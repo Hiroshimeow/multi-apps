@@ -30,11 +30,43 @@ class AppController:
         app = self.config_manager.get_app(app_name)
         return app.get("path") if app else None
 
+    def get_status_snapshot(self, app_ids=None):
+        apps = self.config_manager.get_apps()
+        by_name = {str(app["name"]): app for app in apps}
+        by_id = {str(app.get("id") or app["name"]): app for app in apps}
+        requested = tuple(
+            dict.fromkeys(
+                str(value)
+                for value in (by_id.keys() if app_ids is None else app_ids)
+            )
+        )
+
+        mappings = []
+        for value in requested:
+            app = by_id.get(value) or by_name.get(value)
+            if app is None:
+                mappings.append((value, value))
+                continue
+            stable_id = str(app.get("id") or app["name"])
+            mappings.append((stable_id, str(self._session_key(app))))
+
+        backend_keys = tuple(dict.fromkeys(key for _stable_id, key in mappings))
+        raw = self.session_manager.get_status_snapshot(backend_keys)
+        default = {"status": "STOPPED", "instances": 0}
+        return {
+            stable_id: dict(raw.get(backend_key) or default)
+            for stable_id, backend_key in mappings
+        }
+
     def get_app_status(self, app_name):
         app = self.config_manager.get_app(app_name)
         if not app:
             return {"status": "STOPPED", "instances": 0}
-        return self.session_manager.get_info(self._session_key(app))
+        stable_id = str(app.get("id") or app["name"])
+        return self.get_status_snapshot((stable_id,)).get(
+            stable_id,
+            {"status": "STOPPED", "instances": 0},
+        )
 
     def reconcile(self):
         reconcile = getattr(self.session_manager, "reconcile", None)

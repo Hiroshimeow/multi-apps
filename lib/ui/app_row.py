@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QPoint, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -48,10 +48,11 @@ class AppNameLabel(QLabel):
 
 
 class HoverLogButton(QPushButton):
-    """A log button that reports pointer enter/leave without changing clicks."""
+    """Log button with inert hover and an explicit right-click file action."""
 
     hover_entered = pyqtSignal()
     hover_left = pyqtSignal()
+    secondary_clicked = pyqtSignal()
 
     def enterEvent(self, event):
         self.hover_entered.emit()
@@ -61,11 +62,19 @@ class HoverLogButton(QPushButton):
         self.hover_left.emit()
         super().leaveEvent(event)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self.secondary_clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
 
 class AppControlWidget(QWidget):
-    """One app row; shared controllers own log and blocking lifecycle work."""
+    """Presenter-only app row; the tray coordinator owns status refreshes."""
 
     context_requested = pyqtSignal(object, object)
+    refresh_requested = pyqtSignal(str)
 
     def __init__(
         self,
@@ -82,6 +91,7 @@ class AppControlWidget(QWidget):
         self.lifecycle_controller = lifecycle_controller
         self.log_target = LogTarget(manager.app_id, manager)
         self._shutdown = False
+        self._status_info = {"status": "STOPPED", "instances": 0}
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -144,12 +154,28 @@ class AppControlWidget(QWidget):
         self.btn_stop.clicked.connect(self.on_stop)
 
         self.btn_ologs = HoverLogButton("O.Logs")
-        self.btn_ologs.setToolTip("Open output log; hover to show live log popup")
-        self.btn_ologs.clicked.connect(self.manager.view_output_log)
+        self.btn_ologs.setToolTip(
+            "Click to view output log; right-click to open the physical file"
+        )
+        if self.log_controller is not None:
+            self.btn_ologs.clicked.connect(
+                lambda: self.log_controller.open_target(self.log_target, "stdout")
+            )
+        else:
+            self.btn_ologs.clicked.connect(self.manager.view_output_log)
+        self.btn_ologs.secondary_clicked.connect(self.manager.view_output_log)
 
         self.btn_elogs = HoverLogButton("E.Logs")
-        self.btn_elogs.setToolTip("Open error log; hover to show live log popup")
-        self.btn_elogs.clicked.connect(self.manager.view_error_log)
+        self.btn_elogs.setToolTip(
+            "Click to view error log; right-click to open the physical file"
+        )
+        if self.log_controller is not None:
+            self.btn_elogs.clicked.connect(
+                lambda: self.log_controller.open_target(self.log_target, "stderr")
+            )
+        else:
+            self.btn_elogs.clicked.connect(self.manager.view_error_log)
+        self.btn_elogs.secondary_clicked.connect(self.manager.view_error_log)
 
         for button in (
             self.btn_start,
@@ -168,22 +194,13 @@ class AppControlWidget(QWidget):
         layout.setStretch(0, 1)
         root_layout.addWidget(self.top_row)
 
-        if self.log_controller is not None:
-            self.btn_ologs.hover_entered.connect(self._stdout_entered)
-            self.btn_ologs.hover_left.connect(self._stdout_left)
-            self.btn_elogs.hover_entered.connect(self._stderr_entered)
-            self.btn_elogs.hover_left.connect(self._stderr_left)
-
         if self.lifecycle_controller is not None:
             self.lifecycle_controller.pending_changed.connect(self._pending_changed)
 
         root_layout.activate()
         self.setMinimumWidth(max(self.top_row.sizeHint().width(), 520))
 
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_ui)
-        self.timer.start(1000)
-        self.update_ui()
+        self.apply_status(self._status_info)
 
     def _stdout_entered(self):
         self.log_controller.hover_enter(self.log_target, "stdout")
@@ -208,7 +225,6 @@ class AppControlWidget(QWidget):
         if self._shutdown:
             return
         self._shutdown = True
-        self.timer.stop()
         try:
             self.lbl_name.context_requested.disconnect(self._context_requested)
         except (TypeError, RuntimeError):
@@ -218,25 +234,23 @@ class AppControlWidget(QWidget):
                 self.lifecycle_controller.pending_changed.disconnect(self._pending_changed)
             except (TypeError, RuntimeError):
                 pass
-        if self.log_controller is not None:
-            for signal, callback in (
-                (self.btn_ologs.hover_entered, self._stdout_entered),
-                (self.btn_ologs.hover_left, self._stdout_left),
-                (self.btn_elogs.hover_entered, self._stderr_entered),
-                (self.btn_elogs.hover_left, self._stderr_left),
-            ):
-                try:
-                    signal.disconnect(callback)
-                except (TypeError, RuntimeError):
-                    pass
-
     @staticmethod
     def _fit_button_to_caption(button):
         text_width = button.fontMetrics().horizontalAdvance(button.text()) + 24
         button.setMinimumWidth(max(button.sizeHint().width(), text_width))
 
-    def update_ui(self):
-        status_info = self.manager.get_status_info()
+    def apply_status(self, status_info):
+        self._status_info = dict(status_info or {"status": "STOPPED", "instances": 0})
+        self.update_ui()
+
+    def update_ui(self, status_info=None):
+        if status_info is not None:
+            self._status_info = dict(status_info)
+        status_info = getattr(
+            self,
+            "_status_info",
+            {"status": "STOPPED", "instances": 0},
+        )
         status = status_info.get("status", "STOPPED")
         presentation = self.manager.get_status_presentation(status_info)
         self.lbl_status.setText(presentation["text"])
@@ -262,8 +276,12 @@ class AppControlWidget(QWidget):
         self.btn_start.setEnabled((status == "STOPPED" or multi_run) and not pending)
 
     def on_start(self):
-        self.manager.launch(manual=True, parent=self)
-        self.update_ui()
+        self.manager.launch(
+            manual=True,
+            parent=self,
+            status_info=self._status_info,
+        )
+        self.refresh_requested.emit(str(self.manager.app_id))
 
     def on_stop(self):
         lifecycle_controller = getattr(self, "lifecycle_controller", None)
@@ -271,7 +289,7 @@ class AppControlWidget(QWidget):
             lifecycle_controller.request_stop(self.manager)
         else:
             self.manager.stop_all()
-        self.update_ui()
+        self.refresh_requested.emit(str(self.manager.app_id))
 
     def _notify_result(self, result):
         if not result.ok and self.result_notifier is not None:
