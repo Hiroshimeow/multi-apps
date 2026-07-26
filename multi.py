@@ -716,7 +716,7 @@ class SystemTrayApp(QSystemTrayIcon):
     def _release_idle_log_preferences(self):
         if self.log_popup.isVisible() or self.pinned_logs.count():
             return
-        self.log_preference_owner.shutdown()
+        self.log_preference_owner.request_shutdown()
 
     def _sync_transient_activity(self):
         transient = getattr(self, "transient_ui", None)

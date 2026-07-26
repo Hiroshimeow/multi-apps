@@ -45,24 +45,47 @@ class RecordingBackend:
         self.release_write = threading.Event()
         self.release_write.set()
         self.fail_writes = 0
+        self._call_lock = threading.Lock()
+        self._active_calls = 0
+        self.max_concurrent_calls = 0
+
+    def _enter_call(self):
+        with self._call_lock:
+            self._active_calls += 1
+            self.max_concurrent_calls = max(
+                self.max_concurrent_calls,
+                self._active_calls,
+            )
+
+    def _leave_call(self):
+        with self._call_lock:
+            self._active_calls -= 1
 
     def load_all(self):
-        self.load_calls += 1
-        self.load_threads.append(threading.get_ident())
-        self.load_started.set()
-        self.release_load.wait(timeout=2)
-        return dict(self.initial)
+        self._enter_call()
+        try:
+            self.load_calls += 1
+            self.load_threads.append(threading.get_ident())
+            self.load_started.set()
+            self.release_load.wait(timeout=2)
+            return dict(self.initial)
+        finally:
+            self._leave_call()
 
     def replace_all(self, apps):
-        self.write_threads.append(threading.get_ident())
-        self.write_calls.append(dict(apps))
-        self.write_started.set()
-        self.release_write.wait(timeout=2)
-        if self.fail_writes:
-            self.fail_writes -= 1
-            return False
-        self.initial = dict(apps)
-        return True
+        self._enter_call()
+        try:
+            self.write_threads.append(threading.get_ident())
+            self.write_calls.append(dict(apps))
+            self.write_started.set()
+            self.release_write.wait(timeout=2)
+            if self.fail_writes:
+                self.fail_writes -= 1
+                return False
+            self.initial = dict(apps)
+            return True
+        finally:
+            self._leave_call()
 
 
 class ManualReader:
@@ -96,9 +119,8 @@ class FakeManager:
 
 
 class LogPreferenceOwnerTests(unittest.TestCase):
-    def test_open_target_does_not_wait_for_load_and_applies_preference_after_release(self):
-        expected = LogPanelPreference(5000, "loaded", "stdout")
-        backend = RecordingBackend({"demo": expected})
+    def test_viewer_close_requests_shutdown_without_waiting_for_blocked_load(self):
+        backend = RecordingBackend()
         backend.release_load.clear()
         owner = LogPreferenceOwner(backend, debounce_seconds=0)
         popup = LogPopupWindow()
@@ -112,24 +134,23 @@ class LogPreferenceOwnerTests(unittest.TestCase):
             reader=ManualReader(),
             refresh_interval_ms=10000,
         )
-        controller.viewer_closed.connect(owner.shutdown)
         main_thread = threading.get_ident()
         heartbeat = []
         safety_release = threading.Timer(1.0, backend.release_load.set)
         try:
+            self.assertTrue(hasattr(owner, "request_shutdown"))
+            controller.viewer_closed.connect(owner.request_shutdown)
             with TemporaryDirectory() as temp_dir:
                 target = LogTarget("demo", FakeManager(Path(temp_dir) / "demo.log"))
                 safety_release.start()
                 controller.open_target(target, "stderr")
-
                 self.assertTrue(backend.load_started.wait(timeout=1))
+
+                controller.hide_popup()
                 self.assertFalse(
                     backend.release_load.is_set(),
-                    "open_target waited for preference filesystem load",
+                    "viewer close waited for blocked preference load",
                 )
-                self.assertEqual(popup.panel.line_count.value(), LogPanelPreference().line_count)
-                self.assertEqual(popup.panel.filter_edit.text(), "")
-                self.assertEqual(popup.panel.stream_label.text(), "stderr")
 
                 QTimer.singleShot(0, lambda: heartbeat.append(threading.get_ident()))
                 self.assertTrue(wait_until(lambda: bool(heartbeat)))
@@ -137,16 +158,6 @@ class LogPreferenceOwnerTests(unittest.TestCase):
                 self.assertNotEqual(backend.load_threads, [main_thread])
 
                 backend.release_load.set()
-                self.assertTrue(
-                    wait_until(
-                        lambda: popup.panel.line_count.value() == expected.line_count
-                        and popup.panel.filter_edit.text() == expected.filter_expression
-                    )
-                )
-                self.assertIs(controller.current_target, target)
-                self.assertEqual(controller.current_stream, "stderr")
-
-                controller.hide_popup()
                 self.assertTrue(wait_until(lambda: not owner.is_alive()))
         finally:
             backend.release_load.set()
@@ -196,6 +207,194 @@ class LogPreferenceOwnerTests(unittest.TestCase):
                 self.assertIs(controller.current_target, second)
                 self.assertEqual(controller.current_stream, "stderr")
                 self.assertNotEqual(popup.panel.filter_edit.text(), "first-filter")
+        finally:
+            backend.release_load.set()
+            safety_release.cancel()
+            controller.shutdown()
+            owner.shutdown()
+            popup.deleteLater()
+            QApplication.processEvents()
+
+    def test_last_consumer_release_does_not_wait_for_blocked_write(self):
+        backend = RecordingBackend()
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        popup = LogPopupWindow()
+        controller = LogHoverController(
+            popup,
+            owner,
+            placement_provider=lambda: (
+                QRect(600, 400, 620, 300),
+                QRect(0, 0, 1400, 900),
+            ),
+            reader=ManualReader(),
+            refresh_interval_ms=10000,
+        )
+        heartbeat = []
+        safety_release = threading.Timer(1.0, backend.release_write.set)
+        try:
+            self.assertTrue(hasattr(owner, "request_shutdown"))
+            controller.viewer_closed.connect(owner.request_shutdown)
+            with TemporaryDirectory() as temp_dir:
+                target = LogTarget("demo", FakeManager(Path(temp_dir) / "demo.log"))
+                controller.open_target(target, "stderr")
+                self.assertTrue(wait_until(owner.is_loaded))
+
+                backend.release_write.clear()
+                safety_release.start()
+                popup.panel.filter_edit.setText("durable")
+                self.assertTrue(backend.write_started.wait(timeout=1))
+                expected = LogPanelPreference(
+                    popup.panel.line_count.value(),
+                    "durable",
+                    "stderr",
+                )
+
+                controller.hide_popup()
+                self.assertFalse(
+                    backend.release_write.is_set(),
+                    "last viewer close waited for blocked preference write",
+                )
+                QTimer.singleShot(0, lambda: heartbeat.append(True))
+                self.assertTrue(wait_until(lambda: bool(heartbeat)))
+                self.assertFalse(backend.release_write.is_set())
+
+                backend.release_write.set()
+                self.assertTrue(
+                    wait_until(
+                        lambda: backend.initial.get("demo") == expected
+                        and not owner.is_alive()
+                    )
+                )
+        finally:
+            backend.release_write.set()
+            safety_release.cancel()
+            controller.shutdown()
+            owner.shutdown()
+            popup.deleteLater()
+            QApplication.processEvents()
+
+    def test_reopen_during_final_drain_keeps_new_generation_on_same_worker(self):
+        backend = RecordingBackend()
+        owner = LogPreferenceOwner(backend, debounce_seconds=60)
+        popup = LogPopupWindow()
+        controller = LogHoverController(
+            popup,
+            owner,
+            placement_provider=lambda: (
+                QRect(600, 400, 620, 300),
+                QRect(0, 0, 1400, 900),
+            ),
+            reader=ManualReader(),
+            refresh_interval_ms=10000,
+        )
+        safety_release = threading.Timer(1.0, backend.release_write.set)
+        try:
+            controller.viewer_closed.connect(owner.request_shutdown)
+            with TemporaryDirectory() as temp_dir:
+                first = LogTarget("first", FakeManager(Path(temp_dir) / "first.log"))
+                second = LogTarget("second", FakeManager(Path(temp_dir) / "second.log"))
+                controller.open_target(first, "stdout")
+                self.assertTrue(wait_until(owner.is_loaded))
+                worker = owner._thread
+
+                backend.release_write.clear()
+                safety_release.start()
+                popup.panel.filter_edit.setText("first-pending")
+                controller.hide_popup()
+                self.assertTrue(backend.write_started.wait(timeout=1))
+                self.assertFalse(backend.release_write.is_set())
+
+                controller.open_target(second, "stderr")
+                self.assertIs(owner._thread, worker)
+                owner.debounce_seconds = 0
+                popup.panel.filter_edit.setText("second-new")
+                expected = LogPanelPreference(
+                    popup.panel.line_count.value(),
+                    "second-new",
+                    "stderr",
+                )
+
+                backend.release_write.set()
+                self.assertTrue(
+                    wait_until(lambda: backend.initial.get("second") == expected)
+                )
+                self.assertEqual(len(backend.write_calls), 2)
+                self.assertEqual(backend.max_concurrent_calls, 1)
+                self.assertTrue(owner.is_alive())
+
+                controller.hide_popup()
+                self.assertTrue(wait_until(lambda: not owner.is_alive()))
+        finally:
+            backend.release_write.set()
+            safety_release.cancel()
+            controller.shutdown()
+            owner.shutdown()
+            popup.deleteLater()
+            QApplication.processEvents()
+
+    def test_reopen_during_drain_reuses_single_worker_and_preserves_latest_target(self):
+        backend = RecordingBackend(
+            {
+                "first": LogPanelPreference(10, "first-old", "stdout"),
+                "second": LogPanelPreference(10, "second-old", "stdout"),
+            }
+        )
+        backend.release_load.clear()
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        popup = LogPopupWindow()
+        controller = LogHoverController(
+            popup,
+            owner,
+            placement_provider=lambda: (
+                QRect(600, 400, 620, 300),
+                QRect(0, 0, 1400, 900),
+            ),
+            reader=ManualReader(),
+            refresh_interval_ms=10000,
+        )
+        safety_release = threading.Timer(1.0, backend.release_load.set)
+        try:
+            self.assertTrue(hasattr(owner, "request_shutdown"))
+            controller.viewer_closed.connect(owner.request_shutdown)
+            with TemporaryDirectory() as temp_dir:
+                first = LogTarget("first", FakeManager(Path(temp_dir) / "first.log"))
+                second = LogTarget("second", FakeManager(Path(temp_dir) / "second.log"))
+                safety_release.start()
+                controller.open_target(first, "stdout")
+                self.assertTrue(backend.load_started.wait(timeout=1))
+                worker = owner._thread
+
+                controller.hide_popup()
+                controller.open_target(second, "stderr")
+                self.assertIs(owner._thread, worker)
+                self.assertEqual(
+                    sum(
+                        thread.is_alive() and thread.name == "log-preference-writer"
+                        for thread in threading.enumerate()
+                    ),
+                    1,
+                )
+
+                popup.panel.filter_edit.setText("second-new")
+                expected = LogPanelPreference(
+                    popup.panel.line_count.value(),
+                    "second-new",
+                    "stderr",
+                )
+                backend.release_load.set()
+
+                self.assertTrue(
+                    wait_until(lambda: backend.initial.get("second") == expected)
+                )
+                self.assertIs(controller.current_target, second)
+                self.assertEqual(controller.current_stream, "stderr")
+                self.assertEqual(popup.panel.filter_edit.text(), "second-new")
+                self.assertNotEqual(popup.panel.filter_edit.text(), "first-old")
+                self.assertEqual(backend.max_concurrent_calls, 1)
+                self.assertTrue(owner.is_alive())
+
+                controller.hide_popup()
+                self.assertTrue(wait_until(lambda: not owner.is_alive()))
         finally:
             backend.release_load.set()
             safety_release.cancel()
@@ -263,19 +462,37 @@ class LogPreferenceOwnerTests(unittest.TestCase):
         finally:
             owner.shutdown()
 
-    def test_shutdown_flushes_latest_value_and_stops_worker(self):
+    def test_final_shutdown_flushes_and_joins_worker(self):
         backend = RecordingBackend()
+        backend.release_write.clear()
         owner = LogPreferenceOwner(backend, debounce_seconds=60)
-        owner.save("demo", LogPanelPreference(5000, "latest", "stderr"))
-        owner.shutdown()
-        owner.shutdown()
-
-        self.assertEqual(len(backend.write_calls), 1)
-        self.assertEqual(
-            backend.write_calls[0]["demo"],
-            LogPanelPreference(5000, "latest", "stderr"),
+        expected = LogPanelPreference(5000, "latest", "stderr")
+        shutdown_done = threading.Event()
+        safety_release = threading.Timer(1.0, backend.release_write.set)
+        owner.save("demo", expected)
+        thread = threading.Thread(
+            target=lambda: (owner.shutdown(), shutdown_done.set()),
+            daemon=True,
         )
-        self.assertFalse(owner.is_alive())
+        try:
+            safety_release.start()
+            thread.start()
+            self.assertTrue(backend.write_started.wait(timeout=1))
+            self.assertFalse(shutdown_done.is_set())
+
+            backend.release_write.set()
+            thread.join(timeout=1)
+            self.assertTrue(shutdown_done.is_set())
+            owner.shutdown()
+
+            self.assertEqual(len(backend.write_calls), 1)
+            self.assertEqual(backend.write_calls[0]["demo"], expected)
+            self.assertFalse(owner.is_alive())
+        finally:
+            backend.release_write.set()
+            safety_release.cancel()
+            thread.join(timeout=1)
+            owner.shutdown()
 
     def test_failed_write_keeps_memory_and_later_state_is_not_defaulted(self):
         backend = RecordingBackend()

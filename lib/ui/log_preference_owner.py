@@ -31,6 +31,9 @@ class LogPreferenceOwner(QObject):
     def _ensure_started(self):
         with self._condition:
             if self._thread is not None and self._thread.is_alive():
+                if self._closing:
+                    self._closing = False
+                    self._condition.notify_all()
                 return
             self._closing = False
             self._attempted_generation = self._persisted_generation
@@ -93,50 +96,59 @@ class LogPreferenceOwner(QObject):
             self.preference_loaded.emit(key, preference)
 
     def _run(self):
-        with self._condition:
-            needs_load = not self._loaded
-        if needs_load:
-            self._load_backend()
-
-        while True:
+        worker = threading.current_thread()
+        try:
             with self._condition:
-                while True:
-                    if self._closing:
-                        if self._generation <= self._persisted_generation:
-                            return
-                        version = self._generation
-                        snapshot = dict(self._cache)
-                        final_attempt = True
-                        break
-                    if self._generation > self._attempted_generation:
-                        remaining = self._deadline - time.monotonic()
-                        if remaining > 0:
-                            self._condition.wait(timeout=remaining)
-                            continue
-                        version = self._generation
-                        snapshot = dict(self._cache)
-                        final_attempt = False
-                        break
-                    self._condition.wait()
+                needs_load = not self._loaded
+            if needs_load:
+                self._load_backend()
 
-            try:
-                persisted = bool(self.backend.replace_all(snapshot))
-            except Exception:
-                persisted = False
+            while True:
+                with self._condition:
+                    while True:
+                        if self._closing:
+                            if self._generation <= self._persisted_generation:
+                                return
+                            version = self._generation
+                            snapshot = dict(self._cache)
+                            final_attempt = True
+                            break
+                        if self._generation > self._attempted_generation:
+                            remaining = self._deadline - time.monotonic()
+                            if remaining > 0:
+                                self._condition.wait(timeout=remaining)
+                                continue
+                            version = self._generation
+                            snapshot = dict(self._cache)
+                            final_attempt = False
+                            break
+                        self._condition.wait()
 
-            with self._condition:
-                self._attempted_generation = max(
-                    self._attempted_generation,
-                    version,
-                )
-                if persisted:
-                    self._persisted_generation = max(
-                        self._persisted_generation,
+                try:
+                    persisted = bool(self.backend.replace_all(snapshot))
+                except Exception:
+                    persisted = False
+
+                with self._condition:
+                    self._attempted_generation = max(
+                        self._attempted_generation,
                         version,
                     )
-                self._condition.notify_all()
-                if final_attempt:
-                    return
+                    if persisted:
+                        self._persisted_generation = max(
+                            self._persisted_generation,
+                            version,
+                        )
+                    self._condition.notify_all()
+                    if final_attempt and self._closing:
+                        return
+        finally:
+            with self._condition:
+                if self._thread is worker:
+                    self._thread = None
+                    self._closing = False
+                    self._attempted_generation = self._persisted_generation
+                    self._condition.notify_all()
 
     def flush(self, timeout=5.0):
         if self._thread is None:
@@ -158,14 +170,21 @@ class LogPreferenceOwner(QObject):
                 self._condition.wait(timeout=remaining)
             return self._persisted_generation >= target
 
-    def shutdown(self, timeout=5.0):
+    def request_shutdown(self) -> None:
+        """Request idle worker drain and return without joining the worker."""
         with self._condition:
-            thread = self._thread
-            if thread is None:
+            if self._thread is None:
                 return
             self._closing = True
             self._load_requests.clear()
             self._condition.notify_all()
+
+    def shutdown(self, timeout=5.0):
+        with self._condition:
+            thread = self._thread
+        self.request_shutdown()
+        if thread is None:
+            return
         thread.join(timeout=float(timeout))
         with self._condition:
             if self._thread is thread and not thread.is_alive():

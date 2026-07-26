@@ -151,6 +151,35 @@ class TrayUiArchitectureTests(unittest.TestCase):
         self.assertFalse(self.tray.log_preference_owner.is_alive())
         self.assertTrue(all(not hasattr(row, "timer") for row in rows))
 
+    def test_ui_release_requests_drain_and_final_shutdown_joins(self):
+        class RecordingPreferenceOwner:
+            def __init__(self):
+                self.calls = []
+
+            def request_shutdown(self):
+                self.calls.append("request_shutdown")
+
+            def shutdown(self):
+                self.calls.append("shutdown")
+
+        original = self.tray.log_preference_owner
+        recording = RecordingPreferenceOwner()
+        self.tray.log_preference_owner = recording
+        try:
+            self.tray.log_popup.hide()
+            self.assertEqual(self.tray.pinned_logs.count(), 0)
+
+            self.tray._release_idle_log_preferences()
+            self.assertEqual(recording.calls, ["request_shutdown"])
+
+            self.tray.shutdown_ui()
+            self.assertEqual(
+                recording.calls,
+                ["request_shutdown", "shutdown"],
+            )
+        finally:
+            original.shutdown()
+
     def test_context_activation_toggles_panel_and_internal_click_does_not_hide(self):
         reason = self.tray.ActivationReason.Context
         self.tray.on_tray_activated(reason)
