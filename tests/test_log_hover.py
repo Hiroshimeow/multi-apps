@@ -58,15 +58,18 @@ class LatestLogReaderTests(unittest.TestCase):
         reader = LatestLogReader(backend)
         results = []
         reader.snapshot_ready.connect(lambda request_id, snapshot: results.append((request_id, snapshot)))
+        safety_release = threading.Timer(1.0, backend.release_first.set)
         try:
             first_id = reader.request("first.log", max_lines=100, max_bytes=1024)
             self.assertTrue(backend.first_started.wait(timeout=1))
 
-            started = time.perf_counter()
+            safety_release.start()
             reader.request("second.log", max_lines=100, max_bytes=1024)
             latest_id = reader.request("third.log", max_lines=5000, max_bytes=2048)
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            self.assertLess(elapsed_ms, 20)
+            self.assertFalse(
+                backend.release_first.is_set(),
+                "request waited for the running filesystem read",
+            )
 
             backend.release_first.set()
             self.assertTrue(wait_until(lambda: len(results) == 1))
@@ -79,6 +82,8 @@ class LatestLogReaderTests(unittest.TestCase):
             self.assertEqual(results[0][0], latest_id)
             self.assertEqual(results[0][1].lines, ("third.log",))
         finally:
+            backend.release_first.set()
+            safety_release.cancel()
             reader.shutdown()
         self.assertFalse(reader.is_alive())
 

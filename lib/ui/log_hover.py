@@ -162,6 +162,13 @@ class LogHoverController(QObject):
 
         if self.reader is not None:
             self.reader.snapshot_ready.connect(self._snapshot_ready)
+        self._preference_signal = getattr(
+            self.preference_store,
+            "preference_loaded",
+            None,
+        )
+        if self._preference_signal is not None:
+            self._preference_signal.connect(self._preference_loaded)
         self.panel.pointer_entered.connect(self.popup_entered)
         self.panel.pointer_left.connect(self.popup_left)
         self.panel.filter_changed.connect(self._filter_changed)
@@ -227,8 +234,13 @@ class LogHoverController(QObject):
             return
 
         target_changed = target is not self.current_target
+        preference_ready = True
         if target_changed:
-            preference = self.preference_store.load(target.app_id)
+            async_loader = getattr(self.preference_store, "load_with_status", None)
+            if callable(async_loader):
+                preference, preference_ready = async_loader(target.app_id)
+            else:
+                preference = self.preference_store.load(target.app_id)
             self.panel.configure_controls(
                 line_count=preference.line_count,
                 filter_expression=preference.filter_expression,
@@ -241,7 +253,8 @@ class LogHoverController(QObject):
         self.panel.set_pin_state(self.is_pinned(target, stream))
         self.current_target = target
         self.current_stream = stream
-        self._save_preference()
+        if preference_ready:
+            self._save_preference()
 
         tray_rect, available_rect = self.placement_provider()
         self.popup.show_for(tray_rect, available_rect)
@@ -358,6 +371,29 @@ class LogHoverController(QObject):
         self._save_preference()
         self.request_refresh(reset_bottom=True)
 
+    def _preference_loaded(self, app_id, _preference):
+        if (
+            self._shutdown
+            or self.current_target is None
+            or self.current_stream is None
+            or str(self.current_target.app_id) != str(app_id)
+        ):
+            return
+        async_loader = getattr(self.preference_store, "load_with_status", None)
+        if callable(async_loader):
+            preference, loaded = async_loader(app_id)
+            if not loaded:
+                return
+        else:
+            preference = self.preference_store.load(app_id)
+        self.panel.configure_controls(
+            line_count=preference.line_count,
+            filter_expression=preference.filter_expression,
+            stream=self.current_stream,
+        )
+        self._save_preference()
+        self.request_refresh(reset_bottom=True)
+
     def _save_preference(self):
         if self.current_target is None or self.current_stream is None:
             return False
@@ -410,6 +446,8 @@ class LogHoverController(QObject):
         ]
         if self.reader is not None:
             signals.insert(0, (self.reader.snapshot_ready, self._snapshot_ready))
+        if self._preference_signal is not None:
+            signals.insert(0, (self._preference_signal, self._preference_loaded))
         for signal, callback in signals:
             try:
                 signal.disconnect(callback)

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from PyQt6.QtCore import QRect
+from PyQt6.QtCore import QRect, QTimer
 from PyQt6.QtWidgets import QApplication
 
 from lib.ui.log_hover import LogHoverController, LogTarget
@@ -35,6 +35,10 @@ class RecordingBackend:
     def __init__(self, initial=None):
         self.initial = dict(initial or {})
         self.load_calls = 0
+        self.load_threads = []
+        self.load_started = threading.Event()
+        self.release_load = threading.Event()
+        self.release_load.set()
         self.write_calls = []
         self.write_threads = []
         self.write_started = threading.Event()
@@ -44,6 +48,9 @@ class RecordingBackend:
 
     def load_all(self):
         self.load_calls += 1
+        self.load_threads.append(threading.get_ident())
+        self.load_started.set()
+        self.release_load.wait(timeout=2)
         return dict(self.initial)
 
     def replace_all(self, apps):
@@ -89,9 +96,10 @@ class FakeManager:
 
 
 class LogPreferenceOwnerTests(unittest.TestCase):
-    def test_open_target_never_waits_for_durable_load_or_save(self):
-        backend = RecordingBackend()
-        backend.release_write.clear()
+    def test_open_target_does_not_wait_for_load_and_applies_preference_after_release(self):
+        expected = LogPanelPreference(5000, "loaded", "stdout")
+        backend = RecordingBackend({"demo": expected})
+        backend.release_load.clear()
         owner = LogPreferenceOwner(backend, debounce_seconds=0)
         popup = LogPopupWindow()
         controller = LogHoverController(
@@ -104,20 +112,93 @@ class LogPreferenceOwnerTests(unittest.TestCase):
             reader=ManualReader(),
             refresh_interval_ms=10000,
         )
+        controller.viewer_closed.connect(owner.shutdown)
         main_thread = threading.get_ident()
+        heartbeat = []
+        safety_release = threading.Timer(1.0, backend.release_load.set)
         try:
             with TemporaryDirectory() as temp_dir:
                 target = LogTarget("demo", FakeManager(Path(temp_dir) / "demo.log"))
-                started = time.perf_counter()
+                safety_release.start()
                 controller.open_target(target, "stderr")
-                elapsed_ms = (time.perf_counter() - started) * 1000
 
-            self.assertLess(elapsed_ms, 30)
-            self.assertEqual(backend.load_calls, 1)
-            self.assertTrue(backend.write_started.wait(timeout=1))
-            self.assertNotEqual(backend.write_threads, [main_thread])
+                self.assertTrue(backend.load_started.wait(timeout=1))
+                self.assertFalse(
+                    backend.release_load.is_set(),
+                    "open_target waited for preference filesystem load",
+                )
+                self.assertEqual(popup.panel.line_count.value(), LogPanelPreference().line_count)
+                self.assertEqual(popup.panel.filter_edit.text(), "")
+                self.assertEqual(popup.panel.stream_label.text(), "stderr")
+
+                QTimer.singleShot(0, lambda: heartbeat.append(threading.get_ident()))
+                self.assertTrue(wait_until(lambda: bool(heartbeat)))
+                self.assertEqual(heartbeat, [main_thread])
+                self.assertNotEqual(backend.load_threads, [main_thread])
+
+                backend.release_load.set()
+                self.assertTrue(
+                    wait_until(
+                        lambda: popup.panel.line_count.value() == expected.line_count
+                        and popup.panel.filter_edit.text() == expected.filter_expression
+                    )
+                )
+                self.assertIs(controller.current_target, target)
+                self.assertEqual(controller.current_stream, "stderr")
+
+                controller.hide_popup()
+                self.assertTrue(wait_until(lambda: not owner.is_alive()))
         finally:
-            backend.release_write.set()
+            backend.release_load.set()
+            safety_release.cancel()
+            controller.shutdown()
+            owner.shutdown()
+            popup.deleteLater()
+            QApplication.processEvents()
+
+    def test_loaded_preference_is_applied_only_to_the_current_target(self):
+        backend = RecordingBackend(
+            {
+                "first": LogPanelPreference(10, "first-filter", "stdout"),
+                "second": LogPanelPreference(5000, "second-filter", "stderr"),
+            }
+        )
+        backend.release_load.clear()
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        popup = LogPopupWindow()
+        controller = LogHoverController(
+            popup,
+            owner,
+            placement_provider=lambda: (
+                QRect(600, 400, 620, 300),
+                QRect(0, 0, 1400, 900),
+            ),
+            reader=ManualReader(),
+            refresh_interval_ms=10000,
+        )
+        safety_release = threading.Timer(1.0, backend.release_load.set)
+        try:
+            with TemporaryDirectory() as temp_dir:
+                first = LogTarget("first", FakeManager(Path(temp_dir) / "first.log"))
+                second = LogTarget("second", FakeManager(Path(temp_dir) / "second.log"))
+                safety_release.start()
+                controller.open_target(first, "stdout")
+                controller.open_target(second, "stderr")
+                self.assertFalse(backend.release_load.is_set())
+
+                backend.release_load.set()
+                self.assertTrue(
+                    wait_until(
+                        lambda: popup.panel.line_count.value() == 5000
+                        and popup.panel.filter_edit.text() == "second-filter"
+                    )
+                )
+                self.assertIs(controller.current_target, second)
+                self.assertEqual(controller.current_stream, "stderr")
+                self.assertNotEqual(popup.panel.filter_edit.text(), "first-filter")
+        finally:
+            backend.release_load.set()
+            safety_release.cancel()
             controller.shutdown()
             owner.shutdown()
             popup.deleteLater()

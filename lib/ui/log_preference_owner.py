@@ -3,17 +3,23 @@ from __future__ import annotations
 import threading
 import time
 
+from PyQt6.QtCore import QObject, pyqtSignal
+
 from .log_preferences import LogPanelPreference, _normalize_preference
 
 
-class LogPreferenceOwner:
-    """In-memory preference cache with one coalescing persistence worker."""
+class LogPreferenceOwner(QObject):
+    """Demand-owned async preference cache and coalescing persistence worker."""
 
-    def __init__(self, backend, *, debounce_seconds=0.75):
+    preference_loaded = pyqtSignal(str, object)
+
+    def __init__(self, backend, *, debounce_seconds=0.75, parent=None):
+        super().__init__(parent)
         self.backend = backend
         self.debounce_seconds = max(0.0, float(debounce_seconds))
         self._cache = {}
         self._loaded = False
+        self._load_requests = set()
         self._condition = threading.Condition()
         self._generation = 0
         self._persisted_generation = 0
@@ -24,30 +30,30 @@ class LogPreferenceOwner:
 
     def _ensure_started(self):
         with self._condition:
-            if not self._loaded:
-                try:
-                    loaded = self.backend.load_all()
-                except Exception:
-                    loaded = {}
-                self._cache = {
-                    str(app_id): _normalize_preference(preference)
-                    for app_id, preference in dict(loaded).items()
-                }
-                self._loaded = True
-            if self._thread is None or not self._thread.is_alive():
-                self._closing = False
-                self._attempted_generation = self._persisted_generation
-                self._thread = threading.Thread(
-                    target=self._run,
-                    name="log-preference-writer",
-                    daemon=True,
-                )
-                self._thread.start()
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._closing = False
+            self._attempted_generation = self._persisted_generation
+            self._thread = threading.Thread(
+                target=self._run,
+                name="log-preference-writer",
+                daemon=True,
+            )
+            self._thread.start()
 
-    def load(self, app_id: str) -> LogPanelPreference:
+    def load_with_status(self, app_id: str) -> tuple[LogPanelPreference, bool]:
+        key = str(app_id)
         self._ensure_started()
         with self._condition:
-            return self._cache.get(str(app_id), LogPanelPreference())
+            if self._loaded:
+                return self._cache.get(key, LogPanelPreference()), True
+            self._load_requests.add(key)
+            self._condition.notify_all()
+            return LogPanelPreference(), False
+
+    def load(self, app_id: str) -> LogPanelPreference:
+        preference, _loaded = self.load_with_status(app_id)
+        return preference
 
     def save(self, app_id: str, preference: LogPanelPreference) -> bool:
         self._ensure_started()
@@ -64,7 +70,34 @@ class LogPreferenceOwner:
             self._condition.notify_all()
         return True
 
+    def _load_backend(self):
+        try:
+            loaded = self.backend.load_all()
+        except Exception:
+            loaded = {}
+        normalized = {
+            str(app_id): _normalize_preference(preference)
+            for app_id, preference in dict(loaded).items()
+        }
+        with self._condition:
+            normalized.update(self._cache)
+            self._cache = normalized
+            self._loaded = True
+            requested = tuple(self._load_requests)
+            self._load_requests.clear()
+            preferences = {
+                key: self._cache.get(key, LogPanelPreference()) for key in requested
+            }
+            self._condition.notify_all()
+        for key, preference in preferences.items():
+            self.preference_loaded.emit(key, preference)
+
     def _run(self):
+        with self._condition:
+            needs_load = not self._loaded
+        if needs_load:
+            self._load_backend()
+
         while True:
             with self._condition:
                 while True:
@@ -131,6 +164,7 @@ class LogPreferenceOwner:
             if thread is None:
                 return
             self._closing = True
+            self._load_requests.clear()
             self._condition.notify_all()
         thread.join(timeout=float(timeout))
         with self._condition:
@@ -138,6 +172,10 @@ class LogPreferenceOwner:
                 self._thread = None
                 self._closing = False
                 self._attempted_generation = self._persisted_generation
+
+    def is_loaded(self):
+        with self._condition:
+            return self._loaded
 
     def is_alive(self):
         return self._thread is not None and self._thread.is_alive()

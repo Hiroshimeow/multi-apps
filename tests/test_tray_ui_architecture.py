@@ -250,20 +250,22 @@ class TrayUiArchitectureTests(unittest.TestCase):
         row.manager.stop_all = blocking_stop
         row.btn_stop.setEnabled(True)
         gui_callback_ran = []
+        safety_release = threading.Timer(1.0, release.set)
         try:
-            began = time.perf_counter()
+            safety_release.start()
             row.on_stop()
             row.on_stop()
-            elapsed_ms = (time.perf_counter() - began) * 1000
-            self.assertLess(elapsed_ms, 20)
+            self.assertFalse(release.is_set(), "stop button waited for blocking work")
             self.assertTrue(started.wait(timeout=1))
 
-            QTimer.singleShot(10, lambda: gui_callback_ran.append(time.monotonic()))
+            QTimer.singleShot(0, lambda: gui_callback_ran.append(time.monotonic()))
             self.assertTrue(wait_until(lambda: bool(gui_callback_ran), timeout_ms=300))
+            self.assertFalse(release.is_set(), "GUI heartbeat ran only after stop completed")
             self.assertEqual(len(calls), 1)
             self.assertTrue(self.tray.lifecycle_controller.is_pending(row.manager.app_id))
         finally:
             release.set()
+            safety_release.cancel()
         self.assertTrue(
             wait_until(
                 lambda: not self.tray.lifecycle_controller.is_pending(row.manager.app_id)

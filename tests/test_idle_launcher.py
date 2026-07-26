@@ -214,12 +214,23 @@ class IdleLauncherArchitectureTests(unittest.TestCase):
                     )
                 )
 
+                QTest.mouseClick(
+                    tray.log_popup.panel.pin_button,
+                    Qt.MouseButton.LeftButton,
+                )
+                self.assertTrue(wait_until(lambda: tray.pinned_logs.count() == 1))
+
                 tray.log_controller.hide_popup()
                 self.assertTrue(
                     wait_until(
                         lambda: tray.log_controller.reader is None
-                        and not tray.log_preference_owner.is_alive()
+                        and tray.log_preference_owner.is_alive()
                     )
+                )
+
+                self.assertTrue(tray.pinned_logs.unpin(("demo", "stdout")))
+                self.assertTrue(
+                    wait_until(lambda: not tray.log_preference_owner.is_alive())
                 )
             finally:
                 tray.shutdown_ui()
