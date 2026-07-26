@@ -200,6 +200,8 @@ class LogPreferenceOwner(QObject):
             self._condition.notify_all()
 
     def shutdown(self, timeout=5.0):
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        retry_started = False
         with self._condition:
             thread = self._thread
             if (
@@ -207,16 +209,34 @@ class LogPreferenceOwner(QObject):
                 and (thread is None or not thread.is_alive())
             ):
                 thread = self._start_worker_locked(closing=True)
+                retry_started = True
         self.request_shutdown()
         if thread is None:
             return
-        thread.join(timeout=float(timeout))
-        with self._condition:
-            if self._thread is thread and not thread.is_alive():
-                self._thread = None
-                self._closing = False
-                self._exiting = False
-                self._attempted_generation = self._persisted_generation
+
+        while True:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+            if thread.is_alive():
+                return
+            with self._condition:
+                if self._thread is thread:
+                    self._thread = None
+                    self._closing = False
+                    self._exiting = False
+                    self._attempted_generation = self._persisted_generation
+                if (
+                    not retry_started
+                    and time.monotonic() < deadline
+                    and self._generation > self._persisted_generation
+                    and (
+                        self._thread is None
+                        or not self._thread.is_alive()
+                    )
+                ):
+                    thread = self._start_worker_locked(closing=True)
+                    retry_started = True
+                    continue
+            return
 
     def is_loaded(self):
         with self._condition:

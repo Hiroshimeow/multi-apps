@@ -768,6 +768,84 @@ class LogPreferenceOwnerTests(unittest.TestCase):
             backend.release_write.set()
             owner.shutdown()
 
+    def test_final_shutdown_overlapping_failed_idle_drain_retries_and_joins(self):
+        backend = RecordingBackend()
+        backend.release_load.clear()
+        backend.release_write.clear()
+        backend.fail_writes = 1
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        expected = LogPanelPreference(5000, "overlap", "stderr")
+        shutdown_done = threading.Event()
+        shutdown_thread = threading.Thread(
+            target=lambda: (owner.shutdown(timeout=1), shutdown_done.set()),
+            daemon=True,
+        )
+        try:
+            self.assertTrue(owner.save("demo", expected))
+            first_worker = owner._thread
+            self.assertTrue(backend.load_started.wait(timeout=1))
+
+            owner.request_shutdown()
+            backend.release_load.set()
+            self.assertTrue(backend.write_started.wait(timeout=1))
+            shutdown_thread.start()
+            self.assertFalse(shutdown_done.wait(timeout=0.05))
+            self.assertTrue(first_worker.is_alive())
+
+            backend.release_write.set()
+            shutdown_thread.join(timeout=1)
+            self.assertTrue(shutdown_done.is_set())
+            self.assertEqual(len(backend.write_calls), 2)
+            self.assertEqual(backend.initial["demo"], expected)
+            self.assertEqual(backend.max_concurrent_calls, 1)
+            self.assertFalse(first_worker.is_alive())
+            self.assertFalse(owner.is_alive())
+        finally:
+            backend.release_load.set()
+            backend.release_write.set()
+            shutdown_thread.join(timeout=1)
+            owner.shutdown()
+
+    def test_final_shutdown_overlap_permanent_failure_has_one_retry(self):
+        backend = RecordingBackend()
+        backend.release_load.clear()
+        backend.release_write.clear()
+        backend.force_write_failure = True
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        expected = LogPanelPreference(5000, "overlap", "stderr")
+        shutdown_done = threading.Event()
+        shutdown_thread = threading.Thread(
+            target=lambda: (owner.shutdown(timeout=1), shutdown_done.set()),
+            daemon=True,
+        )
+        try:
+            self.assertTrue(owner.save("demo", expected))
+            first_worker = owner._thread
+            self.assertTrue(backend.load_started.wait(timeout=1))
+
+            owner.request_shutdown()
+            backend.release_load.set()
+            self.assertTrue(backend.write_started.wait(timeout=1))
+            shutdown_thread.start()
+            self.assertFalse(shutdown_done.wait(timeout=0.05))
+
+            backend.release_write.set()
+            shutdown_thread.join(timeout=1)
+            self.assertTrue(shutdown_done.is_set())
+            self.assertEqual(len(backend.write_calls), 2)
+            self.assertEqual(backend.max_concurrent_calls, 1)
+            self.assertFalse(first_worker.is_alive())
+            self.assertFalse(owner.is_alive())
+            with owner._condition:
+                self.assertEqual(owner._cache["demo"], expected)
+                self.assertGreater(owner._generation, owner._persisted_generation)
+        finally:
+            backend.force_write_failure = False
+            backend.release_load.set()
+            backend.release_write.set()
+            shutdown_thread.join(timeout=1)
+            owner.shutdown()
+
     def test_failed_write_keeps_memory_and_later_state_is_not_defaulted(self):
         backend = RecordingBackend()
         backend.fail_writes = 1
