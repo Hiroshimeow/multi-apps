@@ -201,15 +201,19 @@ class LogPreferenceOwner(QObject):
 
     def shutdown(self, timeout=5.0):
         deadline = time.monotonic() + max(0.0, float(timeout))
-        retry_started = False
         with self._condition:
             thread = self._thread
+            final_attempt_claimed = bool(
+                thread is not None
+                and thread.is_alive()
+                and not self._closing
+            )
             if (
                 self._generation > self._persisted_generation
                 and (thread is None or not thread.is_alive())
             ):
                 thread = self._start_worker_locked(closing=True)
-                retry_started = True
+                final_attempt_claimed = True
         self.request_shutdown()
         if thread is None:
             return
@@ -225,7 +229,7 @@ class LogPreferenceOwner(QObject):
                     self._exiting = False
                     self._attempted_generation = self._persisted_generation
                 if (
-                    not retry_started
+                    not final_attempt_claimed
                     and time.monotonic() < deadline
                     and self._generation > self._persisted_generation
                     and (
@@ -234,7 +238,7 @@ class LogPreferenceOwner(QObject):
                     )
                 ):
                     thread = self._start_worker_locked(closing=True)
-                    retry_started = True
+                    final_attempt_claimed = True
                     continue
             return
 
