@@ -46,23 +46,25 @@ class LifecycleCommandControllerTests(unittest.TestCase):
         controller = LifecycleCommandController()
         manager = BlockingManager("demo")
         gui_callback_ran = []
+        safety_release = threading.Timer(1.0, manager.release.set)
         try:
-            started = time.perf_counter()
+            safety_release.start()
             self.assertTrue(controller.request_stop(manager))
+            self.assertFalse(manager.release.is_set(), "request_stop waited for blocking work")
             self.assertFalse(controller.request_stop(manager))
-            submit_ms = (time.perf_counter() - started) * 1000
-            self.assertLess(submit_ms, 20)
             self.assertTrue(manager.started.wait(timeout=1))
 
-            QTimer.singleShot(10, lambda: gui_callback_ran.append(time.monotonic()))
+            QTimer.singleShot(0, lambda: gui_callback_ran.append(time.monotonic()))
             self.assertTrue(wait_until(lambda: bool(gui_callback_ran), timeout_ms=300))
             self.assertTrue(controller.is_pending("demo"))
+            self.assertFalse(manager.release.is_set(), "GUI heartbeat ran only after stop completed")
             self.assertEqual(manager.calls, 1)
 
             manager.release.set()
             self.assertTrue(wait_until(lambda: not controller.is_pending("demo")))
         finally:
             manager.release.set()
+            safety_release.cancel()
             controller.shutdown()
         self.assertFalse(controller.is_alive())
 
@@ -70,18 +72,30 @@ class LifecycleCommandControllerTests(unittest.TestCase):
         controller = LifecycleCommandController()
         first = BlockingManager("first")
         second = BlockingManager("second")
-        first.release.set()
-        second.release.set()
+        safety_release = threading.Timer(
+            1.0,
+            lambda: (first.release.set(), second.release.set()),
+        )
         try:
-            started = time.perf_counter()
+            safety_release.start()
             accepted = controller.request_stop_all((first, second, first))
-            elapsed_ms = (time.perf_counter() - started) * 1000
             self.assertEqual(accepted, 2)
-            self.assertLess(elapsed_ms, 20)
-            self.assertTrue(wait_until(lambda: not controller.pending_ids()))
+            self.assertFalse(first.release.is_set(), "request_stop_all waited for blocking work")
+            self.assertFalse(second.release.is_set(), "request_stop_all waited for blocking work")
+            self.assertTrue(first.started.wait(timeout=1))
+            self.assertEqual(set(controller.pending_ids()), {"first", "second"})
             self.assertEqual(first.calls, 1)
+            self.assertEqual(second.calls, 0)
+
+            first.release.set()
+            self.assertTrue(second.started.wait(timeout=1))
             self.assertEqual(second.calls, 1)
+            second.release.set()
+            self.assertTrue(wait_until(lambda: not controller.pending_ids()))
         finally:
+            first.release.set()
+            second.release.set()
+            safety_release.cancel()
             controller.shutdown()
 
 
