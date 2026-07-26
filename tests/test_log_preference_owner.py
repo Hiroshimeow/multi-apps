@@ -91,6 +91,27 @@ class RecordingBackend:
             self._leave_call()
 
 
+class BlockingSecondFailureBackend(RecordingBackend):
+    def __init__(self):
+        super().__init__()
+        self.second_write_started = threading.Event()
+        self.release_second_write = threading.Event()
+
+    def replace_all(self, apps):
+        self._enter_call()
+        try:
+            self.write_threads.append(threading.get_ident())
+            self.write_calls.append(dict(apps))
+            call_number = len(self.write_calls)
+            self.write_started.set()
+            if call_number == 2:
+                self.second_write_started.set()
+                self.release_second_write.wait(timeout=2)
+            return False
+        finally:
+            self._leave_call()
+
+
 class FinalExitGateCondition(threading.Condition):
     """Pause a writer after final-exit state is externally observable."""
 
@@ -915,6 +936,71 @@ class LogPreferenceOwnerTests(unittest.TestCase):
             backend.force_write_failure = False
             backend.release_write.set()
             shutdown_thread.join(timeout=1)
+            owner.shutdown()
+
+    def test_concurrent_final_shutdown_callers_share_one_replacement(self):
+        backend = BlockingSecondFailureBackend()
+        backend.release_load.clear()
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        expected = LogPanelPreference(5000, "shared-final", "stderr")
+        first_done = threading.Event()
+        second_done = threading.Event()
+        first_shutdown = threading.Thread(
+            target=lambda: (owner.shutdown(timeout=1), first_done.set()),
+            daemon=True,
+        )
+        second_shutdown = threading.Thread(
+            target=lambda: (owner.shutdown(timeout=1), second_done.set()),
+            daemon=True,
+        )
+        original_request_shutdown = owner.request_shutdown
+        request_lock = threading.Lock()
+        request_count = 0
+        second_request_seen = threading.Event()
+
+        def tracked_request_shutdown():
+            nonlocal request_count
+            with request_lock:
+                request_count += 1
+                if request_count == 2:
+                    second_request_seen.set()
+            original_request_shutdown()
+
+        try:
+            self.assertTrue(owner.save("demo", expected))
+            self.assertTrue(backend.load_started.wait(timeout=1))
+            owner.request_shutdown()
+            backend.release_load.set()
+            self.assertTrue(wait_until(lambda: not owner.is_alive()))
+            self.assertEqual(len(backend.write_calls), 1)
+
+            owner.request_shutdown = tracked_request_shutdown
+            first_shutdown.start()
+            self.assertTrue(backend.second_write_started.wait(timeout=1))
+            second_shutdown.start()
+            self.assertTrue(second_request_seen.wait(timeout=1))
+            self.assertFalse(first_done.is_set())
+            self.assertFalse(second_done.is_set())
+
+            backend.release_second_write.set()
+            first_shutdown.join(timeout=1)
+            second_shutdown.join(timeout=1)
+
+            self.assertTrue(first_done.is_set())
+            self.assertTrue(second_done.is_set())
+            self.assertEqual(len(backend.write_calls), 2)
+            self.assertEqual(backend.max_concurrent_calls, 1)
+            self.assertFalse(owner.is_alive())
+            with owner._condition:
+                self.assertEqual(owner._cache["demo"], expected)
+                self.assertGreater(owner._generation, owner._persisted_generation)
+        finally:
+            owner.request_shutdown = original_request_shutdown
+            backend.release_load.set()
+            backend.release_second_write.set()
+            first_shutdown.join(timeout=1)
+            second_shutdown.join(timeout=1)
+            backend.force_write_failure = False
             owner.shutdown()
 
     def test_failed_write_keeps_memory_and_later_state_is_not_defaulted(self):

@@ -28,6 +28,8 @@ class LogPreferenceOwner(QObject):
         self._closing = False
         self._exiting = False
         self._thread = None
+        self._final_shutdown_thread = None
+        self._final_shutdown_waiters = 0
 
     def _start_worker_locked(self, *, closing=False):
         self._thread = None
@@ -202,45 +204,76 @@ class LogPreferenceOwner(QObject):
     def shutdown(self, timeout=5.0):
         deadline = time.monotonic() + max(0.0, float(timeout))
         with self._condition:
+            final_thread = self._final_shutdown_thread
+            if (
+                self._final_shutdown_waiters == 0
+                and final_thread is not None
+                and (not final_thread.is_alive() or not self._closing)
+            ):
+                self._final_shutdown_thread = None
+            self._final_shutdown_waiters += 1
             thread = self._thread
-            final_attempt_claimed = bool(
-                thread is not None
+            if (
+                self._final_shutdown_thread is None
+                and thread is not None
                 and thread.is_alive()
                 and not self._closing
-            )
+            ):
+                self._final_shutdown_thread = thread
             if (
-                self._generation > self._persisted_generation
+                self._final_shutdown_thread is None
+                and self._generation > self._persisted_generation
                 and (thread is None or not thread.is_alive())
             ):
                 thread = self._start_worker_locked(closing=True)
-                final_attempt_claimed = True
-        self.request_shutdown()
-        if thread is None:
-            return
-
-        while True:
-            thread.join(timeout=max(0.0, deadline - time.monotonic()))
-            if thread.is_alive():
+                self._final_shutdown_thread = thread
+        try:
+            self.request_shutdown()
+            if thread is None:
                 return
+
+            while True:
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+                if thread.is_alive():
+                    return
+                with self._condition:
+                    if self._thread is thread:
+                        self._thread = None
+                        self._closing = False
+                        self._exiting = False
+                        self._attempted_generation = self._persisted_generation
+                    final_thread = self._final_shutdown_thread
+                    if (
+                        final_thread is not None
+                        and final_thread is not thread
+                        and final_thread.is_alive()
+                        and time.monotonic() < deadline
+                    ):
+                        thread = final_thread
+                        continue
+                    if (
+                        final_thread is None
+                        and time.monotonic() < deadline
+                        and self._generation > self._persisted_generation
+                        and (
+                            self._thread is None
+                            or not self._thread.is_alive()
+                        )
+                    ):
+                        thread = self._start_worker_locked(closing=True)
+                        self._final_shutdown_thread = thread
+                        continue
+                return
+        finally:
             with self._condition:
-                if self._thread is thread:
-                    self._thread = None
-                    self._closing = False
-                    self._exiting = False
-                    self._attempted_generation = self._persisted_generation
+                self._final_shutdown_waiters -= 1
+                final_thread = self._final_shutdown_thread
                 if (
-                    not final_attempt_claimed
-                    and time.monotonic() < deadline
-                    and self._generation > self._persisted_generation
-                    and (
-                        self._thread is None
-                        or not self._thread.is_alive()
-                    )
+                    self._final_shutdown_waiters == 0
+                    and final_thread is not None
+                    and not final_thread.is_alive()
                 ):
-                    thread = self._start_worker_locked(closing=True)
-                    final_attempt_claimed = True
-                    continue
-            return
+                    self._final_shutdown_thread = None
 
     def is_loaded(self):
         with self._condition:
