@@ -44,6 +44,13 @@ class LogPreferenceOwner(QObject):
             )
             self._thread.start()
 
+    def _release_worker_locked(self, worker):
+        if self._thread is worker:
+            self._thread = None
+            self._closing = False
+            self._attempted_generation = self._persisted_generation
+            self._condition.notify_all()
+
     def load_with_status(self, app_id: str) -> tuple[LogPanelPreference, bool]:
         key = str(app_id)
         self._ensure_started()
@@ -97,6 +104,7 @@ class LogPreferenceOwner(QObject):
 
     def _run(self):
         worker = threading.current_thread()
+        released = False
         try:
             with self._condition:
                 needs_load = not self._loaded
@@ -108,6 +116,8 @@ class LogPreferenceOwner(QObject):
                     while True:
                         if self._closing:
                             if self._generation <= self._persisted_generation:
+                                self._release_worker_locked(worker)
+                                released = True
                                 return
                             version = self._generation
                             snapshot = dict(self._cache)
@@ -140,15 +150,18 @@ class LogPreferenceOwner(QObject):
                             version,
                         )
                     self._condition.notify_all()
-                    if final_attempt and self._closing:
+                    if (
+                        final_attempt
+                        and self._closing
+                        and self._generation <= self._persisted_generation
+                    ):
+                        self._release_worker_locked(worker)
+                        released = True
                         return
         finally:
-            with self._condition:
-                if self._thread is worker:
-                    self._thread = None
-                    self._closing = False
-                    self._attempted_generation = self._persisted_generation
-                    self._condition.notify_all()
+            if not released:
+                with self._condition:
+                    self._release_worker_locked(worker)
 
     def flush(self, timeout=5.0):
         if self._thread is None:

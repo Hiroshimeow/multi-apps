@@ -88,6 +88,43 @@ class RecordingBackend:
             self._leave_call()
 
 
+class FinalExitGateCondition(threading.Condition):
+    """Expose whether final exit released the lock before ownership cleanup."""
+
+    def __init__(self, owner):
+        super().__init__()
+        self.owner = owner
+        self.armed = False
+        self.mode = None
+        self.boundary_reached = threading.Event()
+        self.release_unsafe_gap = threading.Event()
+
+    def arm(self):
+        self.armed = True
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        result = super().__exit__(exc_type, exc_value, traceback)
+        worker = threading.current_thread()
+        owner = self.owner
+        if (
+            self.armed
+            and worker.name == "log-preference-writer"
+            and owner._generation > 0
+            and owner._generation == owner._persisted_generation
+        ):
+            if owner._thread is worker and owner._closing:
+                self.mode = "unsafe"
+            elif owner._thread is None and not owner._closing:
+                self.mode = "atomic"
+            else:
+                return result
+            self.armed = False
+            self.boundary_reached.set()
+            if self.mode == "unsafe":
+                self.release_unsafe_gap.wait(timeout=2)
+        return result
+
+
 class ManualReader:
     class Signal:
         def connect(self, _callback):
@@ -331,6 +368,41 @@ class LogPreferenceOwnerTests(unittest.TestCase):
             owner.shutdown()
             popup.deleteLater()
             QApplication.processEvents()
+
+    def test_reopen_at_final_exit_boundary_does_not_strand_generation(self):
+        backend = RecordingBackend()
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        gate = FinalExitGateCondition(owner)
+        owner._condition = gate
+        first = LogPanelPreference(10, "first", "stdout")
+        second = LogPanelPreference(5000, "second", "stderr")
+        try:
+            self.assertTrue(owner.save("first", first))
+            self.assertTrue(wait_until(lambda: backend.initial.get("first") == first))
+            worker = owner._thread
+
+            gate.arm()
+            owner.request_shutdown()
+            self.assertTrue(gate.boundary_reached.wait(timeout=1))
+            self.assertIn(gate.mode, {"unsafe", "atomic"})
+            if gate.mode == "atomic":
+                self.assertTrue(wait_until(lambda: not worker.is_alive()))
+
+            self.assertTrue(owner.save("second", second))
+            if gate.mode == "unsafe":
+                self.assertIs(owner._thread, worker)
+                gate.release_unsafe_gap.set()
+
+            self.assertTrue(
+                wait_until(lambda: backend.initial.get("second") == second),
+                "reopen/save at final exit stranded a pending generation",
+            )
+            self.assertEqual(backend.max_concurrent_calls, 1)
+            owner.request_shutdown()
+            self.assertTrue(wait_until(lambda: not owner.is_alive()))
+        finally:
+            gate.release_unsafe_gap.set()
+            owner.shutdown()
 
     def test_reopen_during_drain_reuses_single_worker_and_preserves_latest_target(self):
         backend = RecordingBackend(
