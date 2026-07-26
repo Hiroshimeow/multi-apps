@@ -29,6 +29,19 @@ class LogPreferenceOwner(QObject):
         self._exiting = False
         self._thread = None
 
+    def _start_worker_locked(self, *, closing=False):
+        self._thread = None
+        self._closing = bool(closing)
+        self._exiting = False
+        self._attempted_generation = self._persisted_generation
+        self._thread = threading.Thread(
+            target=self._run,
+            name="log-preference-writer",
+            daemon=True,
+        )
+        self._thread.start()
+        return self._thread
+
     def _ensure_started(self):
         while True:
             with self._condition:
@@ -40,16 +53,7 @@ class LogPreferenceOwner(QObject):
                             self._condition.notify_all()
                         return
                 else:
-                    self._thread = None
-                    self._closing = False
-                    self._exiting = False
-                    self._attempted_generation = self._persisted_generation
-                    self._thread = threading.Thread(
-                        target=self._run,
-                        name="log-preference-writer",
-                        daemon=True,
-                    )
-                    self._thread.start()
+                    self._start_worker_locked()
                     return
             thread.join()
 
@@ -198,6 +202,11 @@ class LogPreferenceOwner(QObject):
     def shutdown(self, timeout=5.0):
         with self._condition:
             thread = self._thread
+            if (
+                self._generation > self._persisted_generation
+                and (thread is None or not thread.is_alive())
+            ):
+                thread = self._start_worker_locked(closing=True)
         self.request_shutdown()
         if thread is None:
             return

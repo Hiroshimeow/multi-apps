@@ -683,6 +683,91 @@ class LogPreferenceOwnerTests(unittest.TestCase):
             backend.release_write.set()
             owner.shutdown()
 
+    def test_final_shutdown_retries_pending_failed_idle_drain_and_joins(self):
+        backend = RecordingBackend()
+        backend.release_load.clear()
+        backend.fail_writes = 1
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        expected = LogPanelPreference(5000, "pending", "stderr")
+        shutdown_done = threading.Event()
+        shutdown_thread = threading.Thread(
+            target=lambda: (owner.shutdown(timeout=1), shutdown_done.set()),
+            daemon=True,
+        )
+        try:
+            self.assertTrue(owner.save("demo", expected))
+            first_worker = owner._thread
+            self.assertTrue(backend.load_started.wait(timeout=1))
+
+            owner.request_shutdown()
+            backend.release_load.set()
+            self.assertTrue(backend.write_started.wait(timeout=1))
+            self.assertTrue(wait_until(lambda: not owner.is_alive()))
+            self.assertEqual(len(backend.write_calls), 1)
+            self.assertFalse(first_worker.is_alive())
+            with owner._condition:
+                self.assertGreater(owner._generation, owner._persisted_generation)
+
+            backend.write_started.clear()
+            backend.release_write.clear()
+            shutdown_thread.start()
+            self.assertTrue(backend.write_started.wait(timeout=1))
+            replacement = owner._thread
+            self.assertIsNot(replacement, first_worker)
+            self.assertTrue(replacement.is_alive())
+            self.assertFalse(shutdown_done.is_set())
+
+            backend.release_write.set()
+            shutdown_thread.join(timeout=1)
+            self.assertTrue(shutdown_done.is_set())
+            self.assertEqual(len(backend.write_calls), 2)
+            self.assertEqual(backend.initial["demo"], expected)
+            self.assertEqual(backend.max_concurrent_calls, 1)
+            self.assertFalse(owner.is_alive())
+        finally:
+            backend.release_load.set()
+            backend.release_write.set()
+            shutdown_thread.join(timeout=1)
+            owner.shutdown()
+
+    def test_final_shutdown_permanent_failure_attempts_once_and_exits(self):
+        backend = RecordingBackend()
+        backend.release_load.clear()
+        backend.force_write_failure = True
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        expected = LogPanelPreference(5000, "pending", "stderr")
+        original_request_shutdown = owner.request_shutdown
+        try:
+            self.assertTrue(owner.save("demo", expected))
+            self.assertTrue(backend.load_started.wait(timeout=1))
+
+            owner.request_shutdown()
+            backend.release_load.set()
+            self.assertTrue(backend.write_started.wait(timeout=1))
+            self.assertTrue(wait_until(lambda: not owner.is_alive()))
+            self.assertEqual(len(backend.write_calls), 1)
+
+            backend.write_started.clear()
+
+            def request_after_replacement_write_starts():
+                self.assertTrue(backend.write_started.wait(timeout=1))
+                original_request_shutdown()
+
+            owner.request_shutdown = request_after_replacement_write_starts
+            owner.shutdown(timeout=1)
+            self.assertEqual(len(backend.write_calls), 2)
+            self.assertEqual(backend.max_concurrent_calls, 1)
+            self.assertFalse(owner.is_alive())
+            with owner._condition:
+                self.assertEqual(owner._cache["demo"], expected)
+                self.assertGreater(owner._generation, owner._persisted_generation)
+        finally:
+            owner.request_shutdown = original_request_shutdown
+            backend.force_write_failure = False
+            backend.release_load.set()
+            backend.release_write.set()
+            owner.shutdown()
+
     def test_failed_write_keeps_memory_and_later_state_is_not_defaulted(self):
         backend = RecordingBackend()
         backend.fail_writes = 1
