@@ -26,29 +26,36 @@ class LogPreferenceOwner(QObject):
         self._attempted_generation = 0
         self._deadline = 0.0
         self._closing = False
+        self._exiting = False
         self._thread = None
 
     def _ensure_started(self):
-        with self._condition:
-            if self._thread is not None and self._thread.is_alive():
-                if self._closing:
+        while True:
+            with self._condition:
+                thread = self._thread
+                if thread is not None and thread.is_alive():
+                    if not self._exiting:
+                        if self._closing:
+                            self._closing = False
+                            self._condition.notify_all()
+                        return
+                else:
+                    self._thread = None
                     self._closing = False
-                    self._condition.notify_all()
-                return
-            self._closing = False
-            self._attempted_generation = self._persisted_generation
-            self._thread = threading.Thread(
-                target=self._run,
-                name="log-preference-writer",
-                daemon=True,
-            )
-            self._thread.start()
+                    self._exiting = False
+                    self._attempted_generation = self._persisted_generation
+                    self._thread = threading.Thread(
+                        target=self._run,
+                        name="log-preference-writer",
+                        daemon=True,
+                    )
+                    self._thread.start()
+                    return
+            thread.join()
 
-    def _release_worker_locked(self, worker):
+    def _commit_worker_exit_locked(self, worker):
         if self._thread is worker:
-            self._thread = None
-            self._closing = False
-            self._attempted_generation = self._persisted_generation
+            self._exiting = True
             self._condition.notify_all()
 
     def load_with_status(self, app_id: str) -> tuple[LogPanelPreference, bool]:
@@ -104,7 +111,6 @@ class LogPreferenceOwner(QObject):
 
     def _run(self):
         worker = threading.current_thread()
-        released = False
         try:
             with self._condition:
                 needs_load = not self._loaded
@@ -116,8 +122,7 @@ class LogPreferenceOwner(QObject):
                     while True:
                         if self._closing:
                             if self._generation <= self._persisted_generation:
-                                self._release_worker_locked(worker)
-                                released = True
+                                self._commit_worker_exit_locked(worker)
                                 return
                             version = self._generation
                             snapshot = dict(self._cache)
@@ -155,13 +160,11 @@ class LogPreferenceOwner(QObject):
                         and self._closing
                         and self._generation <= self._persisted_generation
                     ):
-                        self._release_worker_locked(worker)
-                        released = True
+                        self._commit_worker_exit_locked(worker)
                         return
         finally:
-            if not released:
-                with self._condition:
-                    self._release_worker_locked(worker)
+            with self._condition:
+                self._commit_worker_exit_locked(worker)
 
     def flush(self, timeout=5.0):
         if self._thread is None:
@@ -203,6 +206,7 @@ class LogPreferenceOwner(QObject):
             if self._thread is thread and not thread.is_alive():
                 self._thread = None
                 self._closing = False
+                self._exiting = False
                 self._attempted_generation = self._persisted_generation
 
     def is_loaded(self):
@@ -210,7 +214,18 @@ class LogPreferenceOwner(QObject):
             return self._loaded
 
     def is_alive(self):
-        return self._thread is not None and self._thread.is_alive()
+        with self._condition:
+            thread = self._thread
+            if thread is None:
+                return False
+            if thread.is_alive():
+                return True
+            if self._thread is thread:
+                self._thread = None
+                self._closing = False
+                self._exiting = False
+                self._attempted_generation = self._persisted_generation
+            return False
 
 
 __all__ = ["LogPreferenceOwner"]
