@@ -45,6 +45,7 @@ class RecordingBackend:
         self.release_write = threading.Event()
         self.release_write.set()
         self.fail_writes = 0
+        self.force_write_failure = False
         self._call_lock = threading.Lock()
         self._active_calls = 0
         self.max_concurrent_calls = 0
@@ -79,6 +80,8 @@ class RecordingBackend:
             self.write_calls.append(dict(apps))
             self.write_started.set()
             self.release_write.wait(timeout=2)
+            if self.force_write_failure:
+                return False
             if self.fail_writes:
                 self.fail_writes -= 1
                 return False
@@ -627,6 +630,57 @@ class LogPreferenceOwnerTests(unittest.TestCase):
             backend.release_write.set()
             safety_release.cancel()
             thread.join(timeout=1)
+            owner.shutdown()
+
+    def test_failed_final_write_exits_once_and_retries_after_reopen(self):
+        backend = RecordingBackend()
+        backend.release_load.clear()
+        backend.force_write_failure = True
+        owner = LogPreferenceOwner(backend, debounce_seconds=0)
+        expected = LogPanelPreference(5000, "pending", "stderr")
+        try:
+            self.assertTrue(owner.save("demo", expected))
+            worker = owner._thread
+            self.assertTrue(backend.load_started.wait(timeout=1))
+
+            owner.request_shutdown()
+            backend.release_load.set()
+            self.assertTrue(backend.write_started.wait(timeout=1))
+            self.assertTrue(wait_until(lambda: not owner.is_alive()))
+            self.assertEqual(len(backend.write_calls), 1)
+            self.assertFalse(worker.is_alive())
+            with owner._condition:
+                self.assertEqual(owner._cache["demo"], expected)
+                self.assertGreater(owner._generation, owner._persisted_generation)
+
+            backend.force_write_failure = False
+            backend.write_started.clear()
+            backend.release_write.clear()
+            self.assertEqual(owner.load("demo"), expected)
+            replacement = owner._thread
+            self.assertIsNot(replacement, worker)
+            self.assertTrue(backend.write_started.wait(timeout=1))
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(
+                sum(
+                    thread.is_alive() and thread.name == "log-preference-writer"
+                    for thread in threading.enumerate()
+                ),
+                1,
+            )
+
+            backend.release_write.set()
+            self.assertTrue(
+                wait_until(lambda: backend.initial.get("demo") == expected)
+            )
+            self.assertEqual(len(backend.write_calls), 2)
+            self.assertEqual(backend.max_concurrent_calls, 1)
+            owner.request_shutdown()
+            self.assertTrue(wait_until(lambda: not owner.is_alive()))
+        finally:
+            backend.force_write_failure = False
+            backend.release_load.set()
+            backend.release_write.set()
             owner.shutdown()
 
     def test_failed_write_keeps_memory_and_later_state_is_not_defaulted(self):

@@ -158,7 +158,7 @@ class LogPreferenceOwner(QObject):
                     if (
                         final_attempt
                         and self._closing
-                        and self._generation <= self._persisted_generation
+                        and self._generation == version
                     ):
                         self._commit_worker_exit_locked(worker)
                         return
