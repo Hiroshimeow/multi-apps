@@ -23,6 +23,13 @@
 #                       - "--host 127.0.0.1"
 #                   Lệnh cuối: <command> --port 8000 --host 127.0.0.1
 #                   Quote, pipe và shell operator trong fragment được giữ nguyên.
+#                   CLI bất kỳ vẫn dùng cùng `command + args`, ví dụ:
+#                     command: "codex"
+#                     args: ["--model gpt-5", "--sandbox workspace-write"]
+#                   hoặc:
+#                     command: "gemini"
+#                     args: ['--prompt "Review this repository"']
+#                   Launcher không có adapter riêng cho provider và không gọi API.
 #   enabled       : true = hiển thị/cho phép điều khiển; false = bỏ qua trong UI.
 #   auto_start    : true = tự Start sau khi launcher reconcile runtime hiện có.
 #   multi_run     : true = cho phép nhiều lần Start thủ công cùng app.
