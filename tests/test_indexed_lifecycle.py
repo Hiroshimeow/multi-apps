@@ -13,7 +13,10 @@ from unittest.mock import patch
 from lib.runtime.models import RunRecord
 from lib.runtime.process_identity import get_process_created_at
 from lib.runtime.registry import RuntimeRegistry
-from lib.session.subprocess_session import SubprocessSessionManager
+from lib.session.subprocess_session import (
+    STARTING_IPC_GRACE_SECONDS,
+    SubprocessSessionManager,
+)
 
 
 class _ProcessLaunchClient:
@@ -142,6 +145,66 @@ class IndexedLifecycleTests(unittest.TestCase):
             self.assertEqual(len(client.calls), 1)
             self.assertEqual(sum(1 for ok, _message in results if ok), 1)
             self.assertEqual(sum(1 for ok, _message in results if not ok), 1)
+
+    def test_late_session_construction_preserves_fresh_start_reservation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first = self._session(root)
+            release = threading.Event()
+            client = _LaunchClient(release)
+            first.client = client
+            runner = self._runner(root)
+            first_result = []
+            thread = threading.Thread(
+                target=lambda: first_result.append(
+                    first.start(runner, wait_for_ready=False)
+                )
+            )
+            thread.start()
+            self.assertTrue(client.first_launch.wait(2))
+
+            try:
+                late = self._session(root)
+                records = late.registry.list_records()
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0].state, "starting")
+                self.assertEqual(records[0].keeper_pid, 0)
+
+                late.client = _LaunchClient()
+                second_result = late.start(runner, wait_for_ready=False)
+                self.assertFalse(second_result[0], second_result)
+                self.assertEqual(len(late.registry.list_records()), 1)
+            finally:
+                release.set()
+                thread.join(5)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(first_result), 1)
+            self.assertTrue(first_result[0][0], first_result)
+
+    def test_abandoned_zero_identity_starting_record_stops_after_grace(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            registry = RuntimeRegistry(root / ".runtime")
+            registry.save(
+                RunRecord.create(
+                    app_id="demo",
+                    path=str(root),
+                    command="python -c pass",
+                    run_id="abandoned-run",
+                )
+            )
+
+            with patch.object(
+                SubprocessSessionManager,
+                "_record_age_seconds",
+                return_value=STARTING_IPC_GRACE_SECONDS + 1.0,
+            ):
+                session = self._session(root)
+
+            record = session.registry.load("abandoned-run")
+            self.assertIsNotNone(record)
+            self.assertEqual(record.state, "stopped")
 
     def test_app_lock_serializes_cross_process_holders(self):
         context = multiprocessing.get_context("spawn")

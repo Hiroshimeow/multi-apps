@@ -435,6 +435,8 @@ class SubprocessSessionManager(BaseSessionManager):
     def _reconcile_record(self, record):
         if record.state in {"stopped", "failed"}:
             return record
+        if record.state == "starting" and self._starting_within_ipc_grace(record):
+            return record
 
         keeper_alive = process_matches(record.keeper_pid, record.keeper_created_at)
         root_alive = process_matches(record.root_pid, record.root_created_at)
