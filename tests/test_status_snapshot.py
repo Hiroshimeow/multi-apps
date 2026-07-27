@@ -38,7 +38,7 @@ class StatusSnapshotTests(unittest.TestCase):
         self.assertEqual(session.calls, ["alpha", "beta"])
         self.assertEqual(snapshot["alpha"]["run_id"], "alpha")
 
-    def test_subprocess_snapshot_scans_registry_once_for_multiple_apps(self):
+    def test_subprocess_snapshot_reads_index_once_for_multiple_apps(self):
         now = datetime.now(timezone.utc)
         records = [
             RunRecord(
@@ -62,13 +62,17 @@ class StatusSnapshotTests(unittest.TestCase):
         ]
         manager = SubprocessSessionManager.__new__(SubprocessSessionManager)
         manager.registry = MagicMock()
-        manager.registry.list_records.return_value = records
+        manager.registry.indexed_records.return_value = records
         manager.registry.update.side_effect = lambda _run_id, **_changes: None
         manager.client = MagicMock()
 
         snapshot = manager.get_status_snapshot(["alpha", "missing"])
 
-        manager.registry.list_records.assert_called_once_with()
+        manager.registry.indexed_records.assert_called_once_with(
+            {"alpha": ["alpha"], "missing": ["missing"]},
+            include_latest=True,
+        )
+        manager.registry.list_records.assert_not_called()
         manager.client.reap_finished.assert_called_once_with()
         self.assertEqual(snapshot["alpha"]["run_id"], "alpha-new")
         self.assertEqual(snapshot["alpha"]["status"], "STOPPED")

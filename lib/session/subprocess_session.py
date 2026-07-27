@@ -31,36 +31,28 @@ class SubprocessSessionManager(BaseSessionManager):
 
     def start(self, runner, *, wait_for_ready=False):
         app_id = str(runner.app_config.get("id") or slugify_app_id(runner.name))
-        app_records = self._refresh_dead_active_records(app_id)
-        active = [record for record in app_records if record.state in ACTIVE_STATES]
-        orphaned = [record for record in app_records if record.state == "orphaned"]
-        if (active or orphaned) and not runner.app_config.get("multi_run", False):
-            if orphaned and not active:
-                return False, (
-                    f"App '{runner.name}' has an orphaned run whose identity is uncertain."
-                )
-            return False, f"App '{runner.name}' is already running."
-
         workdir = runner.get_workdir()
         if workdir and not os.path.isdir(workdir):
             return False, f"Path is not a directory: {workdir}"
 
-        run_id = uuid4().hex
-        log_dir = self._log_dir() / app_id
-        stdout_path = log_dir / f"{run_id}.out.log"
-        stderr_path = log_dir / f"{run_id}.err.log"
-        record = RunRecord.create(
-            app_id=app_id,
-            run_id=run_id,
-            path=workdir or "",
-            command=runner.app_config["command"],
-            args=list(runner.app_config.get("args") or []),
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-            close_timeout=float(runner.app_config.get("close_timeout", 5.0)),
-        )
-        self.registry.save(record)
+        if runner.app_config.get("multi_run", False):
+            record = self._create_start_record(runner, app_id, workdir)
+            self.registry.save(record)
+        else:
+            with self.registry.app_lock(app_id):
+                app_records = self._refresh_dead_active_records(app_id)
+                active = [record for record in app_records if record.state in ACTIVE_STATES]
+                orphaned = [record for record in app_records if record.state == "orphaned"]
+                if active or orphaned:
+                    if orphaned and not active:
+                        return False, (
+                            f"App '{runner.name}' has an orphaned run whose identity is uncertain."
+                        )
+                    return False, f"App '{runner.name}' is already running."
+                record = self._create_start_record(runner, app_id, workdir)
+                self.registry.save(record)
 
+        run_id = record.run_id
         try:
             keeper_pid, keeper_created_at = self.client.launch_keeper(run_id)
             record.keeper_pid = keeper_pid
@@ -80,6 +72,20 @@ class SubprocessSessionManager(BaseSessionManager):
         if wait_for_ready:
             return self._wait_for_start_ready(current)
         return True, f"Accepted run {run_id}; starting with keeper PID {keeper_pid}"
+
+    def _create_start_record(self, runner, app_id, workdir):
+        run_id = uuid4().hex
+        log_dir = self._log_dir() / app_id
+        return RunRecord.create(
+            app_id=app_id,
+            run_id=run_id,
+            path=workdir or "",
+            command=runner.app_config["command"],
+            args=list(runner.app_config.get("args") or []),
+            stdout_path=str(log_dir / f"{run_id}.out.log"),
+            stderr_path=str(log_dir / f"{run_id}.err.log"),
+            close_timeout=float(runner.app_config.get("close_timeout", 5.0)),
+        )
 
     def _wait_for_start_ready(self, record):
         try:
@@ -332,13 +338,17 @@ class SubprocessSessionManager(BaseSessionManager):
         for app_id in requested:
             for candidate in {app_id, slugify_app_id(app_id)}:
                 candidate_to_requested.setdefault(candidate, []).append(app_id)
-        for record in self.registry.list_records():
+        records = self.registry.indexed_records(
+            candidate_to_requested,
+            include_latest=True,
+        )
+        for record in records:
             for app_id in candidate_to_requested.get(record.app_id, ()):
                 grouped[app_id].append(record)
 
-        for app_id, records in grouped.items():
+        for app_id, app_records in grouped.items():
             snapshot[app_id] = self._status_from_records(
-                self._refresh_dead_records(records)
+                self._refresh_dead_records(app_records)
             )
         return snapshot
 
@@ -400,17 +410,20 @@ class SubprocessSessionManager(BaseSessionManager):
 
     def list_runs(self, app_name=None):
         self.reconcile(app_name)
-        if app_name is None:
-            records = self.registry.list_records()
-        else:
-            records = self._records_for(app_name)
+        records = self.registry.list_records()
+        if app_name is not None:
+            candidates = {str(app_name), slugify_app_id(str(app_name))}
+            records = [record for record in records if record.app_id in candidates]
         return [record.to_dict() for record in records]
 
     def reconcile(self, app_name=None):
         records = (
-            self.registry.list_records()
+            self.registry.indexed_records(include_latest=False)
             if app_name is None
-            else self._records_for(app_name)
+            else self._records_for(
+                app_name,
+                states=set(ACTIVE_STATES).union({"orphaned"}),
+            )
         )
         if app_name is not None or len(records) < 2:
             return [self._reconcile_record(record) for record in records]
@@ -501,11 +514,15 @@ class SubprocessSessionManager(BaseSessionManager):
                 refreshed.append(record)
                 continue
             keeper_alive, root_alive = self._record_processes_alive(record)
-            if keeper_alive:
-                if record.state == "starting" and not self._starting_within_ipc_grace(record):
-                    refreshed.append(self._update_if_changed(record, state="orphaned"))
-                else:
+            if record.state == "starting":
+                if self._starting_within_ipc_grace(record):
                     refreshed.append(record)
+                    continue
+                if keeper_alive:
+                    refreshed.append(self._update_if_changed(record, state="orphaned"))
+                    continue
+            elif keeper_alive:
+                refreshed.append(record)
                 continue
             target_state = "orphaned" if root_alive else "stopped"
             refreshed.append(self._update_if_changed(record, state=target_state))
@@ -523,7 +540,7 @@ class SubprocessSessionManager(BaseSessionManager):
         candidates = {str(app_name), slugify_app_id(str(app_name))}
         return [
             record
-            for record in self.registry.list_records()
+            for record in self.registry.indexed_records(candidates, include_latest=True)
             if record.app_id in candidates and (states is None or record.state in states)
         ]
 
