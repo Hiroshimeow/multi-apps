@@ -134,6 +134,29 @@ class TrayUiArchitectureTests(unittest.TestCase):
             1,
         )
 
+    def test_refresh_all_reuses_one_visible_runtime_coordinator(self):
+        coordinator = self.tray.runtime_refresh
+        self.tray.show_panel()
+        QApplication.processEvents()
+        self.assertTrue(coordinator.is_active)
+        self.assertEqual(len(coordinator.watcher.directories()), 1)
+
+        for _ in range(10):
+            self.tray.refresh_all()
+            QApplication.processEvents()
+
+        self.assertIs(self.tray.runtime_refresh, coordinator)
+        self.assertTrue(coordinator.is_active)
+        self.assertEqual(len(coordinator.watcher.directories()), 1)
+        self.assertEqual(len(self.tray.row_widgets), 1)
+
+        self.tray.tray_panel.hide()
+        QApplication.processEvents()
+        self.assertFalse(coordinator.is_active)
+        self.assertEqual(coordinator.watcher.directories(), [])
+        self.assertFalse(coordinator.debounce_timer.isActive())
+        self.assertFalse(coordinator.fallback_timer.isActive())
+
     def test_shutdown_ui_is_idempotent_and_stops_rows_popup_and_worker(self):
         self.tray.tray_panel.show()
         self.tray.log_popup.show()

@@ -10,7 +10,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from PyQt6.QtCore import QFileSystemWatcher, QRect, QTimer, Qt
 from PyQt6.QtTest import QTest
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import QApplication, QFrame, QStyle, QWidget
 
 import yaml
 
+from lib.runtime.models import RunRecord
 from lib.ui.app_row import AppControlWidget
 from lib.ui.lifecycle_commands import LifecycleCommandController
 from lib.ui.log_hover import LogHoverController, LogTarget
@@ -319,11 +320,15 @@ class IdleLauncherArchitectureTests(unittest.TestCase):
                 QTest.qWait(50)
                 QApplication.processEvents()
                 status_snapshot.assert_not_called()
+                self.assertFalse(tray.runtime_refresh.is_active)
                 self.assertEqual(
                     [timer for timer in tray.findChildren(QTimer) if timer.isActive()],
                     [],
                 )
-                self.assertEqual(tray.findChildren(QFileSystemWatcher), [])
+                watchers = tray.findChildren(QFileSystemWatcher)
+                self.assertEqual(len(watchers), 1)
+                self.assertEqual(watchers[0].files(), [])
+                self.assertEqual(watchers[0].directories(), [])
                 forbidden = {
                     "latest-log-reader",
                     "pinned-log-reader",
@@ -336,6 +341,8 @@ class IdleLauncherArchitectureTests(unittest.TestCase):
                 tray.show_panel()
                 QApplication.processEvents()
                 self.assertEqual(status_snapshot.call_count, 1)
+                self.assertTrue(tray.runtime_refresh.is_active)
+                self.assertEqual(len(watchers[0].directories()), 1)
 
                 tray.tray_panel.hide()
                 QApplication.processEvents()
@@ -343,10 +350,98 @@ class IdleLauncherArchitectureTests(unittest.TestCase):
                 QTest.qWait(50)
                 QApplication.processEvents()
                 status_snapshot.assert_not_called()
+                self.assertFalse(tray.runtime_refresh.is_active)
+                self.assertEqual(watchers[0].files(), [])
+                self.assertEqual(watchers[0].directories(), [])
                 self.assertEqual(
                     [timer for timer in tray.findChildren(QTimer) if timer.isActive()],
                     [],
                 )
+            finally:
+                tray.shutdown_ui()
+                tray.hide()
+                tray.deleteLater()
+                QApplication.processEvents()
+
+    def test_visible_panel_tracks_runtime_changes_without_history_scans_and_hidden_stops(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "setting.yaml"
+            config_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "global": {"log_dir": str(root / "logs")},
+                        "apps": [
+                            {
+                                "id": "demo",
+                                "name": "Demo",
+                                "path": str(root),
+                                "command": "python -c pass",
+                                "enabled": True,
+                            }
+                        ],
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            tray = SystemTrayApp(
+                _QT_APP.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon),
+                config_path=str(config_path),
+                launcher_argv=("multi.py", "--config", str(config_path)),
+            )
+            tray.auto_start_timer.stop()
+            registry = tray.controller.session_manager.registry
+            try:
+                tray.show_panel()
+                self.assertTrue(wait_until(lambda: tray.runtime_refresh.is_active))
+                self.assertEqual(tray.row_widgets[0]._status_info["status"], "STOPPED")
+
+                with patch.object(
+                    registry,
+                    "list_records",
+                    side_effect=AssertionError("visible refresh enumerated history"),
+                ) as history_scan:
+                    registry.save(
+                        RunRecord.create(
+                            app_id="demo",
+                            path=str(root),
+                            command="python -c pass",
+                            run_id="visible-run",
+                        )
+                    )
+                    self.assertTrue(
+                        wait_until(
+                            lambda: tray.row_widgets[0]._status_info["status"]
+                            == "STARTING",
+                            timeout_ms=2000,
+                        )
+                    )
+                    registry.update("visible-run", state="stopped", exit_code=0)
+                    self.assertTrue(
+                        wait_until(
+                            lambda: tray.row_widgets[0]._status_info["status"]
+                            == "STOPPED",
+                            timeout_ms=2000,
+                        )
+                    )
+                    history_scan.assert_not_called()
+
+                    tray.tray_panel.hide()
+                    QApplication.processEvents()
+                    hidden_count = tray.status_snapshot_count
+                    registry.save(
+                        RunRecord.create(
+                            app_id="demo",
+                            path=str(root),
+                            command="python -c pass",
+                            run_id="hidden-run",
+                        )
+                    )
+                    QTest.qWait(200)
+                    QApplication.processEvents()
+                    self.assertEqual(tray.status_snapshot_count, hidden_count)
+                    history_scan.assert_not_called()
             finally:
                 tray.shutdown_ui()
                 tray.hide()

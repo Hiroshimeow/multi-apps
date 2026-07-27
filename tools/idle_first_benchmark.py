@@ -30,6 +30,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from lib.core import AppController
 from lib.runtime.models import RunRecord
 from lib.runtime.process_identity import get_process_created_at
+from lib.runtime.registry import RuntimeRegistry
 
 ACTIVE_STATUSES = frozenset({"STARTING", "RUNNING", "STOPPING", "ORPHANED"})
 
@@ -139,31 +140,53 @@ def _observed_active_count(snapshot: dict[str, dict]) -> int:
 
 def verify_scale(root: Path, history: int, active: int, iterations: int) -> dict:
     fixture = seed(root, history, active)
-    controller = AppController(fixture["config_path"])
-    app_ids = [str(app["id"]) for app in controller.list_apps() if app.get("enabled", True)]
+    _runtime_dir, runs_dir, _logs_dir = _paths(root.resolve())
+    phases = ("migration", "startup", "snapshot")
+    history_enumerations = {phase: 0 for phase in phases}
+    history_record_opens = {phase: 0 for phase in phases}
+    record_opens = {phase: 0 for phase in phases}
+    phase = "migration"
 
-    initialized_snapshot = controller.get_status_snapshot(app_ids)
-    observed_active = _observed_active_count(initialized_snapshot)
+    original_list_records = RuntimeRegistry.list_records
+    original_path_open = Path.open
 
-    registry = getattr(controller.session_manager, "registry", None)
-    history_enumerations = 0
-    original_list_records = getattr(registry, "list_records", None)
+    def counted_open(path, *args, **kwargs):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if path.parent == runs_dir and "r" in mode:
+            record_opens[phase] += 1
+        return original_path_open(path, *args, **kwargs)
 
-    if callable(original_list_records):
+    def counted_list_records(registry, *args, **kwargs):
+        history_enumerations[phase] += 1
+        before = record_opens[phase]
+        records = original_list_records(registry, *args, **kwargs)
+        history_record_opens[phase] += record_opens[phase] - before
+        return records
 
-        def counted_list_records(*args, **kwargs):
-            nonlocal history_enumerations
-            history_enumerations += 1
-            return original_list_records(*args, **kwargs)
+    Path.open = counted_open
+    RuntimeRegistry.list_records = counted_list_records
+    try:
+        controller = AppController(fixture["config_path"])
+        app_ids = [
+            str(app["id"])
+            for app in controller.list_apps()
+            if app.get("enabled", True)
+        ]
 
-        registry.list_records = counted_list_records
+        phase = "startup"
+        initialized_snapshot = controller.get_status_snapshot(app_ids)
+        observed_active = _observed_active_count(initialized_snapshot)
 
-    timings = []
-    last_snapshot = {}
-    for _ in range(max(1, iterations)):
-        started = time.perf_counter()
-        last_snapshot = controller.get_status_snapshot(app_ids)
-        timings.append((time.perf_counter() - started) * 1000.0)
+        phase = "snapshot"
+        timings = []
+        last_snapshot = {}
+        for _ in range(max(1, iterations)):
+            started = time.perf_counter()
+            last_snapshot = controller.get_status_snapshot(app_ids)
+            timings.append((time.perf_counter() - started) * 1000.0)
+    finally:
+        RuntimeRegistry.list_records = original_list_records
+        Path.open = original_path_open
 
     mean_ms = statistics.fmean(timings) if timings else 0.0
     p95_ms = _percentile(timings, 0.95)
@@ -176,10 +199,20 @@ def verify_scale(root: Path, history: int, active: int, iterations: int) -> dict
         "active_fixture_pid": fixture["active_fixture_pid"],
         "active_fixture_scope": fixture["active_fixture_scope"],
         "fixture_reseeded_for_verify": True,
-        "migration_history_opens": None,
-        "normal_startup_history_opens": None,
-        "snapshot_history_enumerations": history_enumerations,
-        "snapshot_exact_record_opens": None,
+        "migration_history_enumerations": history_enumerations["migration"],
+        "migration_history_opens": history_record_opens["migration"],
+        "normal_startup_history_enumerations": history_enumerations["startup"],
+        "normal_startup_history_opens": history_record_opens["startup"],
+        "snapshot_history_enumerations": history_enumerations["snapshot"],
+        "snapshot_history_opens": history_record_opens["snapshot"],
+        "snapshot_exact_record_opens": (
+            record_opens["snapshot"] - history_record_opens["snapshot"]
+        ),
+        "snapshot_exact_record_opens_per_iteration": round(
+            (record_opens["snapshot"] - history_record_opens["snapshot"])
+            / max(1, iterations),
+            3,
+        ),
         "snapshot_mean_ms": round(mean_ms, 3),
         "snapshot_p95_ms": round(p95_ms, 3),
         "panel_mean_ms": None,
@@ -190,6 +223,130 @@ def verify_scale(root: Path, history: int, active: int, iterations: int) -> dict
         "launcher_process_count": None,
         "snapshot_app_count": len(last_snapshot),
     }
+
+
+def verify_visible(root: Path, timeout_seconds: float = 3.0) -> dict:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication, QStyle
+
+    from multi import SystemTrayApp
+
+    root = root.resolve()
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    config_path = _write_idle_config(root)
+    application = QApplication.instance() or QApplication([])
+    tray = SystemTrayApp(
+        application.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon),
+        config_path=str(config_path),
+        launcher_argv=("multi.py", "--config", str(config_path)),
+    )
+    tray.auto_start_timer.stop()
+    registry = tray.controller.session_manager.registry
+    history_enumerations = 0
+    original_list_records = registry.list_records
+
+    def counted_list_records(*args, **kwargs):
+        nonlocal history_enumerations
+        history_enumerations += 1
+        return original_list_records(*args, **kwargs)
+
+    def wait_status(expected: str) -> float:
+        started = time.perf_counter()
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            application.processEvents()
+            if tray.row_widgets[0]._status_info.get("status") == expected:
+                return (time.perf_counter() - started) * 1000.0
+            time.sleep(0.01)
+        actual = tray.row_widgets[0]._status_info.get("status")
+        raise TimeoutError(f"Visible panel did not reach {expected}; actual={actual}")
+
+    try:
+        tray.show_panel()
+        application.processEvents()
+        state_sequence = [tray.row_widgets[0]._status_info.get("status")]
+        visible_initial_snapshots = tray.status_snapshot_count
+        visible_watcher_paths = len(
+            tray.runtime_refresh.watcher.files()
+            + tray.runtime_refresh.watcher.directories()
+        )
+        registry.list_records = counted_list_records
+
+        pid, created_at = _current_process_identity()
+        record = RunRecord.create(
+            app_id="idle-probe",
+            path=str(root),
+            command="benchmark",
+            run_id="visible-run",
+        )
+        transition_ms = []
+        registry.save(record)
+        transition_ms.append(wait_status("STARTING"))
+        state_sequence.append("STARTING")
+
+        registry.update(
+            record.run_id,
+            state="running",
+            keeper_pid=pid,
+            keeper_created_at=created_at,
+            root_pid=pid,
+            root_created_at=created_at,
+        )
+        transition_ms.append(wait_status("RUNNING"))
+        state_sequence.append("RUNNING")
+
+        registry.update(record.run_id, state="stopping")
+        transition_ms.append(wait_status("STOPPING"))
+        state_sequence.append("STOPPING")
+
+        registry.update(record.run_id, state="stopped", exit_code=0)
+        transition_ms.append(wait_status("STOPPED"))
+        state_sequence.append("STOPPED")
+
+        visible_total_snapshots = tray.status_snapshot_count
+        tray.tray_panel.hide()
+        application.processEvents()
+        hidden_snapshot_count = tray.status_snapshot_count
+        hidden_watcher_paths = len(
+            tray.runtime_refresh.watcher.files()
+            + tray.runtime_refresh.watcher.directories()
+        )
+        registry.save(
+            RunRecord.create(
+                app_id="idle-probe",
+                path=str(root),
+                command="benchmark",
+                run_id="hidden-run",
+            )
+        )
+        hidden_deadline = time.monotonic() + 0.25
+        while time.monotonic() < hidden_deadline:
+            application.processEvents()
+            time.sleep(0.01)
+        hidden_refreshes = tray.status_snapshot_count - hidden_snapshot_count
+
+        return {
+            "state_sequence": state_sequence,
+            "history_enumerations": history_enumerations,
+            "visible_initial_snapshots": visible_initial_snapshots,
+            "visible_refresh_snapshots": (
+                visible_total_snapshots - visible_initial_snapshots
+            ),
+            "hidden_refresh_snapshots": hidden_refreshes,
+            "visible_runtime_watcher_paths": visible_watcher_paths,
+            "hidden_runtime_watcher_paths": hidden_watcher_paths,
+            "panel_mean_ms": round(statistics.fmean(transition_ms), 3),
+            "panel_p95_ms": round(_percentile(transition_ms, 0.95), 3),
+            "transition_ms": [round(value, 3) for value in transition_ms],
+        }
+    finally:
+        registry.list_records = original_list_records
+        tray.shutdown_ui()
+        tray.hide()
+        tray.deleteLater()
+        application.processEvents()
 
 
 def _write_idle_config(root: Path) -> Path:
@@ -236,10 +393,12 @@ def verify_idle(
         import json
         import os
         import sys
+        import threading
         from pathlib import Path
 
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+        from PyQt6.QtCore import QFileSystemWatcher, QTimer
         from PyQt6.QtWidgets import QApplication, QStyle
         from multi import SystemTrayApp
 
@@ -252,12 +411,34 @@ def verify_idle(
             launcher_argv=("multi.py", "--config", config_path),
         )
         tray.auto_start_timer.stop()
+        forbidden_workers = {
+            "latest-log-reader",
+            "pinned-log-reader",
+            "launcher-command-worker",
+            "log-preference-writer",
+        }
+        watcher_paths = sum(
+            len(watcher.files()) + len(watcher.directories())
+            for watcher in tray.findChildren(QFileSystemWatcher)
+        )
+        active_timers = sum(
+            1 for timer in tray.findChildren(QTimer) if timer.isActive()
+        )
+        named_workers = sorted(
+            forbidden_workers.intersection(
+                thread.name for thread in threading.enumerate()
+            )
+        )
         ready_path.write_text(
             json.dumps(
                 {
                     "pid": os.getpid(),
                     "parent_pid": os.getppid(),
                     "executable": sys.executable,
+                    "hidden_status_snapshots": tray.status_snapshot_count,
+                    "hidden_runtime_watcher_paths": watcher_paths,
+                    "hidden_active_qtimers": active_timers,
+                    "hidden_named_workers": named_workers,
                 }
             ),
             encoding="utf-8",
@@ -337,6 +518,13 @@ def verify_idle(
             "io_read_bytes_delta": io_end.read_bytes - io_start.read_bytes,
             "io_write_ops_delta": io_end.write_count - io_start.write_count,
             "io_write_bytes_delta": io_end.write_bytes - io_start.write_bytes,
+            "hidden_status_snapshots": int(ready["hidden_status_snapshots"]),
+            "hidden_runtime_watcher_paths": int(
+                ready["hidden_runtime_watcher_paths"]
+            ),
+            "hidden_active_qtimers": int(ready["hidden_active_qtimers"]),
+            "hidden_named_workers": list(ready["hidden_named_workers"]),
+            "hidden_runtime_log_reads": io_end.read_count - io_start.read_count,
             "launcher_threads_max": threads_max,
             "launcher_working_set_bytes_max": working_set_max,
             "launcher_child_processes_max": child_processes_max,
@@ -382,6 +570,10 @@ def build_parser() -> argparse.ArgumentParser:
     scale_parser.add_argument("--assert-snapshot-p95-ms", type=float)
     scale_parser.add_argument("--assert-panel-p95-ms", type=float)
 
+    visible_parser = subparsers.add_parser("verify-visible")
+    visible_parser.add_argument("--root", type=Path, required=True)
+    visible_parser.add_argument("--timeout-seconds", type=float, default=3.0)
+
     idle_parser = subparsers.add_parser("verify-idle")
     idle_parser.add_argument("--root", type=Path, required=True)
     idle_parser.add_argument("--stabilization-seconds", type=float, default=10.0)
@@ -396,6 +588,8 @@ def main(argv: list[str] | None = None) -> int:
         result = seed(args.root, args.history, args.active)
     elif args.command == "verify-scale":
         result = verify_scale(args.root, args.history, args.active, args.iterations)
+    elif args.command == "verify-visible":
+        result = verify_visible(args.root, timeout_seconds=args.timeout_seconds)
     else:
         result = verify_idle(
             args.root,
@@ -408,7 +602,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "verify-scale":
         if not result["active_count_match"]:
             return 5
-        if args.assert_no_history_enumeration and result["snapshot_history_enumerations"] != 0:
+        if args.assert_no_history_enumeration and any(
+            result[key] != 0
+            for key in (
+                "normal_startup_history_enumerations",
+                "normal_startup_history_opens",
+                "snapshot_history_enumerations",
+                "snapshot_history_opens",
+            )
+        ):
             return 2
         if (
             args.assert_snapshot_p95_ms is not None

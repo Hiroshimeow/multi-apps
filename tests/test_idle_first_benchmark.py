@@ -24,6 +24,13 @@ class IdleFirstBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["observed_active_count"], 2)
         self.assertEqual(result["active_count"], 2)
         self.assertTrue(result["active_count_match"])
+        self.assertEqual(result["migration_history_enumerations"], 1)
+        self.assertEqual(result["migration_history_opens"], 20)
+        self.assertEqual(result["normal_startup_history_enumerations"], 0)
+        self.assertEqual(result["normal_startup_history_opens"], 0)
+        self.assertEqual(result["snapshot_history_enumerations"], 0)
+        self.assertEqual(result["snapshot_history_opens"], 0)
+        self.assertGreater(result["snapshot_exact_record_opens"], 0)
 
     def test_verify_scale_cli_fails_when_active_fixture_mismatches(self):
         result = {
@@ -53,6 +60,21 @@ class IdleFirstBenchmarkTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 5)
 
+    def test_verify_visible_tracks_transitions_and_stops_when_hidden(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = HARNESS.verify_visible(Path(temp_dir), timeout_seconds=2.0)
+
+        self.assertEqual(
+            result["state_sequence"],
+            ["STOPPED", "STARTING", "RUNNING", "STOPPING", "STOPPED"],
+        )
+        self.assertEqual(result["history_enumerations"], 0)
+        self.assertEqual(result["visible_initial_snapshots"], 1)
+        self.assertEqual(result["visible_refresh_snapshots"], 4)
+        self.assertEqual(result["hidden_refresh_snapshots"], 0)
+        self.assertEqual(result["visible_runtime_watcher_paths"], 1)
+        self.assertEqual(result["hidden_runtime_watcher_paths"], 0)
+
     def test_verify_idle_measures_direct_qt_launcher_process(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = HARNESS.verify_idle(
@@ -65,6 +87,11 @@ class IdleFirstBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["launched_pid"], result["measured_pid"])
         self.assertNotEqual(result["observer_pid"], result["measured_pid"])
         self.assertEqual(result["launcher_child_processes_max"], 0)
+        self.assertEqual(result["hidden_status_snapshots"], 0)
+        self.assertEqual(result["hidden_runtime_watcher_paths"], 0)
+        self.assertEqual(result["hidden_active_qtimers"], 0)
+        self.assertEqual(result["hidden_named_workers"], [])
+        self.assertEqual(result["hidden_runtime_log_reads"], 0)
         self.assertGreaterEqual(result["launcher_threads_max"], 1)
         self.assertGreater(result["launcher_working_set_bytes_max"], 0)
 
