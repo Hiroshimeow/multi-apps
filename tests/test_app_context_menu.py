@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import QApplication, QWidget
 
 from lib.ui.app_context_popup import AppContextPopup
 from lib.ui.app_tools import AppToolActionResult, AppToolService
-from multi import AppControlWidget, AppNameLabel
+from multi import AppControlWidget, AppManager, AppNameLabel
 
 
 _QT_APP = QApplication.instance() or QApplication([])
@@ -78,6 +78,62 @@ class AppToolTerminalTests(unittest.TestCase):
             self.assertNotIn("cwd", kwargs)
             self.assertIn("stdin", kwargs)
 
+    def test_windows_run_in_terminal_uses_exact_command_and_cwd(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            launcher = MagicMock()
+            service = AppToolService(
+                platform_name="Windows",
+                which=lambda name: "C:/Windows/System32/cmd.exe" if name == "cmd.exe" else None,
+                process_launcher=launcher,
+            )
+
+            result = service.open_terminal(
+                str(root),
+                'uv run server.py --port 8000 --name "Demo App"',
+            )
+
+            self.assertTrue(result.ok)
+            args, kwargs = launcher.call_args
+            self.assertEqual(
+                args[0],
+                [
+                    "C:/Windows/System32/cmd.exe",
+                    "/D",
+                    "/K",
+                    'uv run server.py --port 8000 --name "Demo App"',
+                ],
+            )
+            self.assertEqual(Path(kwargs["cwd"]), root)
+            self.assertEqual(
+                kwargs["creationflags"],
+                getattr(__import__("subprocess"), "CREATE_NEW_CONSOLE", 0),
+            )
+
+
+class AppManagerTerminalTests(unittest.TestCase):
+    def test_run_with_terminal_uses_yaml_command_without_managed_start(self):
+        controller = MagicMock()
+        controller.config_manager.get_app.return_value = {
+            "id": "demo",
+            "name": "Demo",
+            "path": "C:/work/demo",
+            "command": "uv run server.py",
+            "args": ["--port 8000", '--name "Demo App"'],
+        }
+        controller.get_app_workdir.return_value = "C:/work/demo"
+        tool_service = MagicMock()
+        tool_service.open_terminal.return_value = success("C:/work/demo")
+        manager = AppManager(controller, "Demo", tool_service=tool_service)
+
+        result = manager.run_with_terminal()
+
+        self.assertTrue(result.ok)
+        tool_service.open_terminal.assert_called_once_with(
+            "C:/work/demo",
+            'uv run server.py --port 8000 --name "Demo App"',
+        )
+        controller.start_app.assert_not_called()
 
 
 class AppNameLabelTests(unittest.TestCase):
@@ -103,23 +159,41 @@ class AppNameLabelTests(unittest.TestCase):
 
 
 class AppContextPopupTests(unittest.TestCase):
-    def test_popup_contains_only_terminal_action_and_hides_after_trigger(self):
+    def test_popup_contains_run_and_open_terminal_actions(self):
         popup = AppContextPopup()
-        callback = MagicMock()
+        run_callback = MagicMock()
+        open_callback = MagicMock()
         try:
-            popup.show_action(
+            popup.show_actions(
                 QPoint(400, 300),
-                text="Open terminal here",
-                callback=callback,
-                enabled=True,
-                tooltip="ready",
+                run_callback=run_callback,
+                run_enabled=True,
+                run_tooltip="run ready",
+                terminal_callback=open_callback,
+                terminal_enabled=True,
+                terminal_tooltip="terminal ready",
             )
             QApplication.processEvents()
             self.assertTrue(popup.isVisible())
-            self.assertEqual(popup.action_button.text(), "Open terminal here")
-            QTest.mouseClick(popup.action_button, Qt.MouseButton.LeftButton)
+            self.assertEqual(popup.run_button.text(), "Run with terminal")
+            self.assertEqual(popup.terminal_button.text(), "Open terminal here")
+
+            QTest.mouseClick(popup.run_button, Qt.MouseButton.LeftButton)
             QApplication.processEvents()
-            callback.assert_called_once_with()
+            run_callback.assert_called_once_with()
+            open_callback.assert_not_called()
+            self.assertFalse(popup.isVisible())
+
+            popup.show_actions(
+                QPoint(400, 300),
+                run_callback=run_callback,
+                run_enabled=True,
+                terminal_callback=open_callback,
+                terminal_enabled=True,
+            )
+            QTest.mouseClick(popup.terminal_button, Qt.MouseButton.LeftButton)
+            QApplication.processEvents()
+            open_callback.assert_called_once_with()
             self.assertFalse(popup.isVisible())
         finally:
             popup.deleteLater()

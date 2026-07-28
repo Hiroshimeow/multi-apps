@@ -346,6 +346,13 @@ class AppManager:
     def open_terminal(self):
         return self.tool_service.open_terminal(self.get_workdir())
 
+    def run_with_terminal(self):
+        command = CommandRunner.build_command_text(
+            self.app_config["command"],
+            self.app_config.get("args", []),
+        )
+        return self.tool_service.open_terminal(self.get_workdir(), command)
+
     def get_log_path(self, stream):
         """Return the newest active, otherwise newest historical, run log path."""
         status_info = self.get_status_info()
@@ -650,14 +657,26 @@ class SystemTrayApp(QSystemTrayIcon):
 
     def show_app_context(self, manager, global_pos):
         status = manager.terminal_status()
-        self.app_context_popup.show_action(
+        self.app_context_popup.show_actions(
             global_pos,
-            text="Open terminal here",
-            callback=lambda current=manager: self._open_terminal(current),
-            enabled=status.ok,
-            tooltip=status.message,
+            run_callback=lambda current=manager: self._run_with_terminal(current),
+            run_enabled=status.ok,
+            run_tooltip=status.message,
+            terminal_callback=lambda current=manager: self._open_terminal(current),
+            terminal_enabled=status.ok,
+            terminal_tooltip=status.message,
         )
         self._sync_transient_activity()
+
+    def _run_with_terminal(self, manager):
+        result = manager.run_with_terminal()
+        if not result.ok:
+            self.showMessage(
+                "Run with terminal failed",
+                f"{manager.name}: {result.message}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000,
+            )
 
     def _open_terminal(self, manager):
         result = manager.open_terminal()

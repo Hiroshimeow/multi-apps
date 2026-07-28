@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -215,14 +216,41 @@ class AppToolService:
             return status
         return self._open_target(status.target)
 
-    def open_terminal(self, workdir: str | None) -> AppToolActionResult:
+    def open_terminal(
+        self,
+        workdir: str | None,
+        command: str | None = None,
+    ) -> AppToolActionResult:
         status = self.terminal_status(workdir)
         if not status.ok:
             return status
+        command_text = str(command).strip() if command is not None else ""
+        if command is not None and not command_text:
+            return AppToolActionResult(
+                False,
+                "COMMAND_MISSING",
+                "Application command is unavailable.",
+                target=status.target,
+            )
         try:
             executable = Path(status.argv[0]).name.casefold()
+            argv = list(status.argv)
             kwargs = {}
             if self._platform_key == "windows":
+                if command_text:
+                    if executable == "wt.exe":
+                        argv.extend(
+                            [
+                                self.which("cmd.exe") or "cmd.exe",
+                                "/D",
+                                "/K",
+                                command_text,
+                            ]
+                        )
+                    elif executable in {"pwsh.exe", "powershell.exe"}:
+                        argv.extend(["-Command", command_text])
+                    else:
+                        argv.append(command_text)
                 if executable in {"pwsh.exe", "powershell.exe", "cmd.exe"}:
                     kwargs["cwd"] = status.target
                     kwargs["creationflags"] = getattr(
@@ -239,6 +267,14 @@ class AppToolService:
                         }
                     )
             else:
+                if command_text:
+                    script = f"{command_text}; exec ${{SHELL:-/bin/sh}}"
+                    if executable in {"x-terminal-emulator", "xterm", "konsole"}:
+                        argv.extend(["-e", "sh", "-lc", script])
+                    elif executable == "gnome-terminal":
+                        argv.extend(["--", "sh", "-lc", script])
+                    else:
+                        argv.extend(["--command", shlex.join(["sh", "-lc", script])])
                 if executable in {"x-terminal-emulator", "xterm"}:
                     kwargs["cwd"] = status.target
                 kwargs.update(
@@ -249,19 +285,28 @@ class AppToolService:
                         "start_new_session": True,
                     }
                 )
-            self.process_launcher(list(status.argv), **kwargs)
+            self.process_launcher(argv, **kwargs)
+            if command_text:
+                return AppToolActionResult(
+                    True,
+                    "TERMINAL_COMMAND_STARTED",
+                    f"Started unmanaged command in terminal: {command_text}",
+                    target=status.target,
+                    argv=tuple(argv),
+                )
             return AppToolActionResult(
                 True,
                 "TERMINAL_OPENED",
                 f"Opened terminal in: {status.target}",
                 target=status.target,
-                argv=status.argv,
+                argv=tuple(argv),
             )
         except Exception as exc:
+            action = "run command in" if command_text else "open"
             return AppToolActionResult(
                 False,
                 "LAUNCH_FAILED",
-                f"Failed to open terminal: {exc}",
+                f"Failed to {action} terminal: {exc}",
                 target=status.target,
-                argv=status.argv,
+                argv=tuple(argv),
             )

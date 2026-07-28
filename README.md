@@ -130,7 +130,8 @@ Các path tương đối được resolve từ thư mục chứa file config.
 Chuột phải icon tray mở `TrayPanelWindow`, một cửa sổ Qt độc lập thay vì nhét widget tương tác vào `QMenu`. Tray panel được đặt sát mép phải của usable screen đang chứa tray icon.
 
 - nhấp trái tên app để mở working directory của app;
-- nhấp phải tên app, phím Menu hoặc `Shift+F10` mở popup riêng có **Open terminal here**;
+- nhấp phải tên app, phím Menu hoặc `Shift+F10` mở popup riêng có **Run with terminal** và **Open terminal here**;
+- **Run with terminal** chạy `command + args` trong YAML bằng terminal độc lập, không tạo run ID và không thuộc quản lý Start/Stop/log của launcher;
 - terminal được khởi chạy với `cwd` đúng working directory của app, không thay đổi working directory toàn cục của launcher;
 - **Open Config** mở đúng file YAML mà launcher hiện tại đang dùng;
 - **Stop All Apps**, **Restart Launcher** và **Exit Launcher** giữ nguyên chức năng tương ứng;

@@ -46,28 +46,36 @@ class AppContextPopup(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(0)
-        self.action_button = QPushButton("Open terminal here", self)
-        self.action_button.setFlat(True)
-        self.action_button.setStyleSheet("text-align: left; padding: 6px 10px;")
-        layout.addWidget(self.action_button)
-        self._callback = None
-        self.action_button.clicked.connect(self._trigger)
+        self.run_button = QPushButton("Run with terminal", self)
+        self.terminal_button = QPushButton("Open terminal here", self)
+        for button in (self.run_button, self.terminal_button):
+            button.setFlat(True)
+            button.setStyleSheet("text-align: left; padding: 6px 10px;")
+            layout.addWidget(button)
+        self._run_callback = None
+        self._terminal_callback = None
+        self.run_button.clicked.connect(self._trigger_run)
+        self.terminal_button.clicked.connect(self._trigger_terminal)
         self.hide()
 
-    def show_action(
+    def show_actions(
         self,
         anchor: QPoint,
         *,
-        text: str,
-        callback,
-        enabled: bool,
-        tooltip: str = "",
+        run_callback,
+        run_enabled: bool,
+        terminal_callback,
+        terminal_enabled: bool,
+        run_tooltip: str = "",
+        terminal_tooltip: str = "",
         available_geometry: QRect | None = None,
     ):
-        self._callback = callback if enabled else None
-        self.action_button.setText(str(text))
-        self.action_button.setEnabled(bool(enabled))
-        self.action_button.setToolTip(str(tooltip or ""))
+        self._run_callback = run_callback if run_enabled else None
+        self._terminal_callback = terminal_callback if terminal_enabled else None
+        self.run_button.setEnabled(bool(run_enabled))
+        self.run_button.setToolTip(str(run_tooltip or ""))
+        self.terminal_button.setEnabled(bool(terminal_enabled))
+        self.terminal_button.setToolTip(str(terminal_tooltip or ""))
         self.ensurePolished()
         size = self.sizeHint().expandedTo(QSize(190, 1))
         if available_geometry is None:
@@ -82,8 +90,13 @@ class AppContextPopup(QFrame):
         self.raise_()
         return self.frameGeometry()
 
-    def _trigger(self):
-        callback = self._callback
+    def _trigger_run(self):
+        self._trigger(self._run_callback)
+
+    def _trigger_terminal(self):
+        self._trigger(self._terminal_callback)
+
+    def _trigger(self, callback):
         self.hide()
         if callback is not None:
             callback()
@@ -96,7 +109,8 @@ class AppContextPopup(QFrame):
         super().keyPressEvent(event)
 
     def hideEvent(self, event):
-        self._callback = None
+        self._run_callback = None
+        self._terminal_callback = None
         self.hidden.emit()
         super().hideEvent(event)
 

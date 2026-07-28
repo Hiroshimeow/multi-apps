@@ -260,11 +260,12 @@ class TrayUiArchitectureTests(unittest.TestCase):
         pinned = self.tray.pinned_logs.windows()[0]
         self.assertTrue(pinned.isVisible())
 
-        self.tray.app_context_popup.show_action(
+        self.tray.app_context_popup.show_actions(
             QPoint(300, 300),
-            text="Open terminal here",
-            callback=lambda: None,
-            enabled=True,
+            run_callback=lambda: None,
+            run_enabled=True,
+            terminal_callback=lambda: None,
+            terminal_enabled=True,
         )
         outside = QPushButton("outside")
         outside.show()
@@ -324,26 +325,44 @@ class TrayUiArchitectureTests(unittest.TestCase):
             )
         )
 
-    def test_terminal_context_action_routes_to_exact_manager(self):
+    def test_app_context_routes_run_and_open_terminal_to_exact_manager(self):
         row = self.tray.row_widgets[0]
         row.manager.terminal_status = lambda: type(
             "Status", (), {"ok": True, "message": "ready"}
         )()
         calls = []
+        row.manager.run_with_terminal = lambda: (
+            calls.append(("run", row.manager.get_workdir()))
+            or type("Result", (), {"ok": True, "message": "started"})()
+        )
         row.manager.open_terminal = lambda: (
-            calls.append(row.manager.get_workdir())
+            calls.append(("open", row.manager.get_workdir()))
             or type("Result", (), {"ok": True, "message": "opened"})()
         )
         self.tray.show_panel()
+
         self.tray.show_app_context(row.manager, QPoint(400, 300))
         QApplication.processEvents()
         self.assertTrue(self.tray.app_context_popup.isVisible())
         QTest.mouseClick(
-            self.tray.app_context_popup.action_button,
+            self.tray.app_context_popup.run_button,
             Qt.MouseButton.LeftButton,
         )
         QApplication.processEvents()
-        self.assertEqual(calls, [row.manager.get_workdir()])
+
+        self.tray.show_app_context(row.manager, QPoint(400, 300))
+        QTest.mouseClick(
+            self.tray.app_context_popup.terminal_button,
+            Qt.MouseButton.LeftButton,
+        )
+        QApplication.processEvents()
+        self.assertEqual(
+            calls,
+            [
+                ("run", row.manager.get_workdir()),
+                ("open", row.manager.get_workdir()),
+            ],
+        )
         self.assertFalse(self.tray.app_context_popup.isVisible())
 
 
