@@ -48,7 +48,7 @@ class AppNameLabel(QLabel):
 
 
 class HoverLogButton(QPushButton):
-    """Log button with inert hover and an explicit right-click file action."""
+    """Log button with live hover and an explicit right-click file action."""
 
     hover_entered = pyqtSignal()
     hover_left = pyqtSignal()
@@ -194,6 +194,11 @@ class AppControlWidget(QWidget):
         layout.setStretch(0, 1)
         root_layout.addWidget(self.top_row)
 
+        if self.log_controller is not None:
+            self.btn_ologs.hover_entered.connect(self._stdout_entered)
+            self.btn_ologs.hover_left.connect(self._stdout_left)
+            self.btn_elogs.hover_entered.connect(self._stderr_entered)
+            self.btn_elogs.hover_left.connect(self._stderr_left)
         if self.lifecycle_controller is not None:
             self.lifecycle_controller.pending_changed.connect(self._pending_changed)
 
@@ -229,6 +234,17 @@ class AppControlWidget(QWidget):
             self.lbl_name.context_requested.disconnect(self._context_requested)
         except (TypeError, RuntimeError):
             pass
+        if self.log_controller is not None:
+            for signal, callback in (
+                (self.btn_ologs.hover_entered, self._stdout_entered),
+                (self.btn_ologs.hover_left, self._stdout_left),
+                (self.btn_elogs.hover_entered, self._stderr_entered),
+                (self.btn_elogs.hover_left, self._stderr_left),
+            ):
+                try:
+                    signal.disconnect(callback)
+                except (TypeError, RuntimeError):
+                    pass
         if self.lifecycle_controller is not None:
             try:
                 self.lifecycle_controller.pending_changed.disconnect(self._pending_changed)

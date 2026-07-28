@@ -112,6 +112,17 @@ class IdleLauncherArchitectureTests(unittest.TestCase):
         )
         widget.show()
         try:
+            widget.btn_ologs.hover_entered.emit()
+            log_controller.hover_enter.assert_called_once_with(
+                widget.log_target,
+                "stdout",
+            )
+            widget.btn_ologs.hover_left.emit()
+            log_controller.hover_leave.assert_called_once_with(
+                widget.log_target,
+                "stdout",
+            )
+
             QTest.mouseClick(widget.btn_ologs, Qt.MouseButton.LeftButton)
             log_controller.open_target.assert_called_once_with(widget.log_target, "stdout")
             manager.view_output_log.assert_not_called()
@@ -135,7 +146,7 @@ class IdleLauncherArchitectureTests(unittest.TestCase):
         finally:
             controller.shutdown()
 
-    def test_log_hover_is_inert_and_reader_lives_only_while_viewer_is_open(self):
+    def test_log_hover_opens_live_reader_only_on_demand(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "demo.log"
             path.write_text("hello\n", encoding="utf-8")
@@ -150,21 +161,38 @@ class IdleLauncherArchitectureTests(unittest.TestCase):
                 _Preferences(),
                 placement_provider=lambda: (QRect(0, 0, 400, 300), QRect(0, 0, 1200, 800)),
                 open_delay_ms=0,
-                hide_delay_ms=0,
-                refresh_interval_ms=10000,
+                hide_delay_ms=20,
+                refresh_interval_ms=20,
             )
             try:
                 self.assertIsNone(controller.reader)
                 controller.hover_enter(target, "stdout")
-                QApplication.processEvents()
-                self.assertIsNone(controller.reader)
-                self.assertFalse(popup.isVisible())
+                self.assertTrue(
+                    wait_until(
+                        lambda: popup.isVisible()
+                        and controller.reader is not None
+                        and controller.reader.is_alive()
+                    )
+                )
+                self.assertTrue(
+                    wait_until(
+                        lambda: "hello" in popup.panel.log_view.toPlainText()
+                    )
+                )
 
-                controller.open_target(target, "stdout")
-                self.assertIsNotNone(controller.reader)
-                self.assertTrue(controller.reader.is_alive())
-                controller.hide_popup()
-                self.assertIsNone(controller.reader)
+                path.write_text("hello\nnext\n", encoding="utf-8")
+                self.assertTrue(
+                    wait_until(
+                        lambda: "next" in popup.panel.log_view.toPlainText()
+                    )
+                )
+
+                controller.hover_leave(target, "stdout")
+                self.assertTrue(
+                    wait_until(
+                        lambda: not popup.isVisible() and controller.reader is None
+                    )
+                )
             finally:
                 controller.shutdown()
                 popup.deleteLater()
@@ -214,6 +242,11 @@ class IdleLauncherArchitectureTests(unittest.TestCase):
                         and tray.log_popup.isVisible()
                     )
                 )
+                QTest.qWait(400)
+                QApplication.processEvents()
+                self.assertTrue(tray.log_popup.isVisible())
+                self.assertIsNotNone(tray.log_controller.reader)
+                self.assertTrue(tray.log_controller.reader.is_alive())
 
                 QTest.mouseClick(
                     tray.log_popup.panel.pin_button,

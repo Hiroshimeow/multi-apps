@@ -15,7 +15,7 @@ class RuntimeRefreshCoordinator(QObject):
         refresh_callback: Callable[[], object],
         *,
         debounce_ms: int = 100,
-        fallback_ms: int = 3000,
+        fallback_ms: int = 1000,
         parent=None,
     ):
         super().__init__(parent)

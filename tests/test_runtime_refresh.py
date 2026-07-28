@@ -29,6 +29,19 @@ def wait_until(predicate, timeout_ms=1000):
 
 
 class RuntimeRefreshCoordinatorTests(unittest.TestCase):
+    def test_default_visible_fallback_updates_once_per_second(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            coordinator = RuntimeRefreshCoordinator(
+                Path(temp_dir) / ".runtime",
+                lambda: None,
+            )
+            try:
+                self.assertEqual(coordinator.fallback_timer.interval(), 1000)
+            finally:
+                coordinator.stop()
+                coordinator.deleteLater()
+                QApplication.processEvents()
+
     def test_start_watches_one_directory_and_coalesces_bursts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             calls = []

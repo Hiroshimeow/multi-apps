@@ -109,7 +109,7 @@ class LatestLogReader(QObject):
 
 
 class LogHoverController(QObject):
-    """Own one explicit log viewer, one demand-owned reader, and preferences."""
+    """Own one live log viewer, one demand-owned reader, and preferences."""
 
     viewer_closed = pyqtSignal()
 
@@ -204,7 +204,19 @@ class LogHoverController(QObject):
 
     def hover_enter(self, target: LogTarget, stream: str):
         self._validate_stream(stream)
-        return None
+        if self._shutdown:
+            return
+        self._hover_owner = (target, stream)
+        self.hide_timer.stop()
+        if target is self.current_target and stream == self.current_stream:
+            self.open_timer.stop()
+            self._pending_target = None
+            self._pending_stream = None
+            self.refresh_timer.start()
+            return
+        self._pending_target = target
+        self._pending_stream = stream
+        self.open_timer.start()
 
     def _owns_hover(self, target: LogTarget, stream: str):
         owner = self._hover_owner
@@ -212,7 +224,14 @@ class LogHoverController(QObject):
 
     def hover_leave(self, target: LogTarget, stream: str):
         self._validate_stream(stream)
-        return None
+        if not self._owns_hover(target, stream):
+            return
+        self._hover_owner = None
+        if target is self._pending_target and stream == self._pending_stream:
+            self.open_timer.stop()
+            self._pending_target = None
+            self._pending_stream = None
+        self._schedule_hide()
 
     def _open_pending(self):
         target = self._pending_target
@@ -335,8 +354,6 @@ class LogHoverController(QObject):
             now is not None and self.popup.isAncestorOf(now)
         ):
             self.hide_timer.stop()
-        elif self._hover_owner is None and not self._popup_hovered:
-            self._schedule_hide()
 
     def _focus_within_popup(self):
         focus = QApplication.focusWidget()
