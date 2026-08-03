@@ -109,7 +109,9 @@ class LatestLogReader(QObject):
 
 
 class LogHoverController(QObject):
-    """Own hover timing, one popup, one reader, and per-app preferences."""
+    """Own one live log viewer, one demand-owned reader, and preferences."""
+
+    viewer_closed = pyqtSignal()
 
     def __init__(
         self,
@@ -130,7 +132,8 @@ class LogHoverController(QObject):
         self.panel = popup.panel
         self.preference_store = preference_store
         self.placement_provider = placement_provider
-        self.reader = reader or LatestLogReader(parent=self)
+        self.reader = reader
+        self._owns_reader = reader is None
         self.pin_handler = pin_handler
         self.is_pinned = is_pinned or (lambda _target, _stream: False)
         self.current_target: LogTarget | None = None
@@ -157,7 +160,15 @@ class LogHoverController(QObject):
         self.refresh_timer.setInterval(int(refresh_interval_ms))
         self.refresh_timer.timeout.connect(self.request_refresh)
 
-        self.reader.snapshot_ready.connect(self._snapshot_ready)
+        if self.reader is not None:
+            self.reader.snapshot_ready.connect(self._snapshot_ready)
+        self._preference_signal = getattr(
+            self.preference_store,
+            "preference_loaded",
+            None,
+        )
+        if self._preference_signal is not None:
+            self._preference_signal.connect(self._preference_loaded)
         self.panel.pointer_entered.connect(self.popup_entered)
         self.panel.pointer_left.connect(self.popup_left)
         self.panel.filter_changed.connect(self._filter_changed)
@@ -172,6 +183,24 @@ class LogHoverController(QObject):
     def _validate_stream(stream):
         if stream not in {"stdout", "stderr"}:
             raise ValueError("stream must be stdout or stderr")
+
+    def _ensure_reader(self):
+        if self.reader is None:
+            self.reader = LatestLogReader(parent=self)
+            self.reader.snapshot_ready.connect(self._snapshot_ready)
+        return self.reader
+
+    def _release_reader(self):
+        if not self._owns_reader or self.reader is None:
+            return
+        reader = self.reader
+        try:
+            reader.snapshot_ready.disconnect(self._snapshot_ready)
+        except (TypeError, RuntimeError):
+            pass
+        self.reader = None
+        reader.shutdown()
+        reader.deleteLater()
 
     def hover_enter(self, target: LogTarget, stream: str):
         self._validate_stream(stream)
@@ -194,6 +223,7 @@ class LogHoverController(QObject):
         return owner is not None and owner[0] is target and owner[1] == stream
 
     def hover_leave(self, target: LogTarget, stream: str):
+        self._validate_stream(stream)
         if not self._owns_hover(target, stream):
             return
         self._hover_owner = None
@@ -223,8 +253,13 @@ class LogHoverController(QObject):
             return
 
         target_changed = target is not self.current_target
+        preference_ready = True
         if target_changed:
-            preference = self.preference_store.load(target.app_id)
+            async_loader = getattr(self.preference_store, "load_with_status", None)
+            if callable(async_loader):
+                preference, preference_ready = async_loader(target.app_id)
+            else:
+                preference = self.preference_store.load(target.app_id)
             self.panel.configure_controls(
                 line_count=preference.line_count,
                 filter_expression=preference.filter_expression,
@@ -237,10 +272,12 @@ class LogHoverController(QObject):
         self.panel.set_pin_state(self.is_pinned(target, stream))
         self.current_target = target
         self.current_stream = stream
-        self._save_preference()
+        if preference_ready:
+            self._save_preference()
 
         tray_rect, available_rect = self.placement_provider()
         self.popup.show_for(tray_rect, available_rect)
+        self._ensure_reader()
         self.request_refresh(reset_bottom=True)
         self.refresh_timer.start()
 
@@ -249,7 +286,7 @@ class LogHoverController(QObject):
             return None
         stream_key = "out" if self.current_stream == "stdout" else "err"
         manager = self.current_target.manager
-        request_id = self.reader.request(
+        request_id = self._ensure_reader().request(
             lambda current=manager, selected=stream_key: current.get_log_path(selected),
             max_lines=self.panel.line_count.value(),
             max_bytes=DEFAULT_MAX_BYTES,
@@ -317,8 +354,6 @@ class LogHoverController(QObject):
             now is not None and self.popup.isAncestorOf(now)
         ):
             self.hide_timer.stop()
-        elif self._hover_owner is None and not self._popup_hovered:
-            self._schedule_hide()
 
     def _focus_within_popup(self):
         focus = QApplication.focusWidget()
@@ -353,6 +388,29 @@ class LogHoverController(QObject):
         self._save_preference()
         self.request_refresh(reset_bottom=True)
 
+    def _preference_loaded(self, app_id, _preference):
+        if (
+            self._shutdown
+            or self.current_target is None
+            or self.current_stream is None
+            or str(self.current_target.app_id) != str(app_id)
+        ):
+            return
+        async_loader = getattr(self.preference_store, "load_with_status", None)
+        if callable(async_loader):
+            preference, loaded = async_loader(app_id)
+            if not loaded:
+                return
+        else:
+            preference = self.preference_store.load(app_id)
+        self.panel.configure_controls(
+            line_count=preference.line_count,
+            filter_expression=preference.filter_expression,
+            stream=self.current_stream,
+        )
+        self._save_preference()
+        self.request_refresh(reset_bottom=True)
+
     def _save_preference(self):
         if self.current_target is None or self.current_stream is None:
             return False
@@ -366,6 +424,7 @@ class LogHoverController(QObject):
         )
 
     def hide_popup(self):
+        was_open = self.popup.isVisible() or self.current_target is not None
         self.open_timer.stop()
         self.hide_timer.stop()
         self.refresh_timer.stop()
@@ -379,6 +438,9 @@ class LogHoverController(QObject):
         self.current_stream = None
         self.popup.hide()
         self.panel.reset()
+        self._release_reader()
+        if was_open:
+            self.viewer_closed.emit()
 
     def shutdown(self):
         if self._shutdown:
@@ -392,19 +454,26 @@ class LogHoverController(QObject):
                 application.focusChanged.disconnect(self._focus_changed)
             except (TypeError, RuntimeError):
                 pass
-        for signal, callback in (
-            (self.reader.snapshot_ready, self._snapshot_ready),
+        signals = [
             (self.panel.pointer_entered, self.popup_entered),
             (self.panel.pointer_left, self.popup_left),
             (self.panel.filter_changed, self._filter_changed),
             (self.panel.line_count_changed, self._line_count_changed),
             (self.panel.pin_changed, self._pin_changed),
-        ):
+        ]
+        if self.reader is not None:
+            signals.insert(0, (self.reader.snapshot_ready, self._snapshot_ready))
+        if self._preference_signal is not None:
+            signals.insert(0, (self._preference_signal, self._preference_loaded))
+        for signal, callback in signals:
             try:
                 signal.disconnect(callback)
             except (TypeError, RuntimeError):
                 pass
-        self.reader.shutdown()
+        reader = self.reader
+        self.reader = None
+        if reader is not None:
+            reader.shutdown()
 
 
 __all__ = [

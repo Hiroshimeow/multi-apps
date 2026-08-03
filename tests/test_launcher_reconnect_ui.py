@@ -207,7 +207,7 @@ class RecoveredUiStateTests(unittest.TestCase):
         controller.get_app_status.return_value = status_info
         return AppManager(controller, name)
 
-    def _update_widget(self, manager):
+    def _update_widget(self, manager, status_info):
         widget = SimpleNamespace(
             manager=manager,
             lbl_status=MagicMock(),
@@ -215,7 +215,7 @@ class RecoveredUiStateTests(unittest.TestCase):
             btn_start=MagicMock(),
             btn_stop=MagicMock(),
         )
-        AppControlWidget.update_ui(widget)
+        AppControlWidget.update_ui(widget, status_info)
         return widget
 
     @staticmethod
@@ -231,19 +231,19 @@ class RecoveredUiStateTests(unittest.TestCase):
         gc.collect()
 
 
-    def test_widget_shutdown_stops_timer_and_is_idempotent(self):
+    def test_widget_shutdown_is_idempotent_without_status_timer(self):
         host = QWidget()
         widget = AppControlWidget(
             self._manager({"status": "STOPPED", "instances": 0}),
             host,
         )
-        self.assertTrue(widget.timer.isActive())
+        self.assertFalse(hasattr(widget, "timer"))
 
         widget.shutdown()
         widget.shutdown()
         QApplication.processEvents()
 
-        self.assertFalse(widget.timer.isActive())
+        self.assertFalse(hasattr(widget, "timer"))
         self.assertFalse(hasattr(widget, "_app_context_menu"))
         widget.deleteLater()
         host.deleteLater()
@@ -309,7 +309,7 @@ class RecoveredUiStateTests(unittest.TestCase):
         self.assertEqual(presentation["tooltip"], "Last-used time unavailable")
         self.assertNotEqual(presentation["text"], "Never")
 
-        widget = self._update_widget(manager)
+        widget = self._update_widget(manager, status_info)
         widget.btn_stop.setEnabled.assert_called_once_with(False)
         widget.btn_start.setEnabled.assert_called_once_with(True)
         widget.lbl_status.setText.assert_called_once_with("—")
@@ -371,7 +371,8 @@ class RecoveredUiStateTests(unittest.TestCase):
             with self.subTest(status=status, multi_run=multi_run):
                 status_info = {"status": status, "instances": 1}
                 widget = self._update_widget(
-                    self._manager(status_info, multi_run=multi_run)
+                    self._manager(status_info, multi_run=multi_run),
+                    status_info,
                 )
                 widget.btn_start.setEnabled.assert_called_once_with(start_enabled)
                 widget.btn_stop.setEnabled.assert_called_once_with(stop_enabled)
@@ -389,6 +390,7 @@ class RecoveredUiStateTests(unittest.TestCase):
         )
         host = QWidget()
         widget = AppControlWidget(manager, host)
+        widget.apply_status(manager.get_status_info())
         try:
             self.assertEqual(widget.lbl_name.text(), name)
             self.assertEqual(widget.lbl_name.textFormat(), Qt.TextFormat.PlainText)

@@ -76,6 +76,37 @@ class ArgsEditModelTests(unittest.TestCase):
             ['--raw "one value" && echo ok'],
         )
 
+    def test_codex_and_gemini_style_parameters_use_the_generic_command_path(self):
+        cases = [
+            (
+                "codex",
+                [
+                    "--model gpt-5",
+                    "--sandbox workspace-write",
+                    'exec "Fix the failing tests"',
+                ],
+                'codex --model gpt-5 --sandbox workspace-write exec "Fix the failing tests"',
+            ),
+            (
+                "gemini",
+                [
+                    "--model gemini-2.5-pro",
+                    '--prompt "Review this repository"',
+                ],
+                'gemini --model gemini-2.5-pro --prompt "Review this repository"',
+            ),
+        ]
+        for command, args, expected in cases:
+            with self.subTest(command=command):
+                model = ArgsEditModel({"command": command, "args": args})
+                runner = CommandRunner(
+                    {"name": command, "command": command, "args": args},
+                    {},
+                )
+                self.assertEqual(model.final_command(), expected)
+                self.assertEqual(runner.build_command(), expected)
+                self.assertEqual(model.final_command(), runner.build_command())
+
 
 class ArgsEditDialogTests(unittest.TestCase):
     @classmethod
@@ -143,11 +174,16 @@ class ArgsEditCallerTests(unittest.TestCase):
         manager.launch.return_value = (True, "Started")
         widget = MagicMock()
         widget.manager = manager
+        widget._status_info = {"status": "STOPPED", "instances": 0}
 
         AppControlWidget.on_start(widget)
 
-        manager.launch.assert_called_once_with(manual=True, parent=widget)
-        widget.update_ui.assert_called_once_with()
+        manager.launch.assert_called_once_with(
+            manual=True,
+            parent=widget,
+            status_info=widget._status_info,
+        )
+        widget.refresh_requested.emit.assert_called_once_with(str(manager.app_id))
 
     def test_manual_gui_accept_passes_one_run_override_non_blocking(self):
         manager, controller, _app = self._manager()
@@ -718,8 +754,8 @@ class ArgsEditRuntimeTests(unittest.TestCase):
                 controller.config_manager.get_app("Args Runtime")["args"]
             )
             overrides = [
-                '--edited "two words"',
-                '--next "another value"',
+                '--model gpt-5 --sandbox workspace-write exec "Fix the failing tests"',
+                '--model gemini-2.5-pro --prompt "Review this repository"',
             ]
             records = []
 
@@ -768,7 +804,11 @@ class ArgsEditRuntimeTests(unittest.TestCase):
                     encoding="utf-8",
                     errors="replace",
                 )
-                expected_value = "two words" if "two words" in override else "another value"
+                expected_value = (
+                    "Fix the failing tests"
+                    if "workspace-write" in override
+                    else "Review this repository"
+                )
                 self.assertIn(expected_value, output)
 
             self.assertNotEqual(records[0].run_id, records[1].run_id)

@@ -81,8 +81,11 @@ class TrayUiArchitectureTests(unittest.TestCase):
         self.assertIsInstance(self.tray.tray_panel, TrayPanelWindow)
         self.assertIsInstance(self.tray.log_popup, LogPopupWindow)
         self.assertIsInstance(self.tray.log_controller, LogHoverController)
-        self.assertTrue(self.tray.lifecycle_controller.is_alive())
-        self.assertTrue(self.tray.pinned_logs.reader.is_alive())
+        self.assertFalse(self.tray.lifecycle_controller.is_alive())
+        self.assertIsNone(self.tray.log_controller.reader)
+        self.assertIsNone(self.tray.pinned_logs.reader)
+        self.assertFalse(self.tray.log_preference_owner.is_alive())
+        self.assertFalse(self.tray.transient_ui.pointer_timer.isActive())
         self.assertFalse(hasattr(self.tray, "menu"))
 
         rows = self.tray.tray_panel.findChildren(AppControlWidget)
@@ -113,7 +116,7 @@ class TrayUiArchitectureTests(unittest.TestCase):
     def test_one_hundred_rebuilds_keep_one_controller_popup_and_live_row_set(self):
         controller = self.tray.log_controller
         popup = self.tray.log_popup
-        reader_thread = controller.reader._thread
+        self.assertIsNone(controller.reader)
         previous_rows = tuple(self.tray.row_widgets)
 
         for _ in range(100):
@@ -122,15 +125,37 @@ class TrayUiArchitectureTests(unittest.TestCase):
 
         self.assertIs(self.tray.log_controller, controller)
         self.assertIs(self.tray.log_popup, popup)
-        self.assertIs(controller.reader._thread, reader_thread)
-        self.assertTrue(controller.reader.is_alive())
+        self.assertIsNone(controller.reader)
         self.assertEqual(len(self.tray.row_widgets), 1)
-        self.assertTrue(all(row.timer.isActive() for row in self.tray.row_widgets))
-        self.assertTrue(all(not row.timer.isActive() for row in previous_rows))
+        self.assertTrue(all(not hasattr(row, "timer") for row in self.tray.row_widgets))
+        self.assertTrue(all(not hasattr(row, "timer") for row in previous_rows))
         self.assertEqual(
             len(self.tray.log_popup.findChildren(type(self.tray.log_popup.panel))),
             1,
         )
+
+    def test_refresh_all_reuses_one_visible_runtime_coordinator(self):
+        coordinator = self.tray.runtime_refresh
+        self.tray.show_panel()
+        QApplication.processEvents()
+        self.assertTrue(coordinator.is_active)
+        self.assertEqual(len(coordinator.watcher.directories()), 1)
+
+        for _ in range(10):
+            self.tray.refresh_all()
+            QApplication.processEvents()
+
+        self.assertIs(self.tray.runtime_refresh, coordinator)
+        self.assertTrue(coordinator.is_active)
+        self.assertEqual(len(coordinator.watcher.directories()), 1)
+        self.assertEqual(len(self.tray.row_widgets), 1)
+
+        self.tray.tray_panel.hide()
+        QApplication.processEvents()
+        self.assertFalse(coordinator.is_active)
+        self.assertEqual(coordinator.watcher.directories(), [])
+        self.assertFalse(coordinator.debounce_timer.isActive())
+        self.assertFalse(coordinator.fallback_timer.isActive())
 
     def test_shutdown_ui_is_idempotent_and_stops_rows_popup_and_worker(self):
         self.tray.tray_panel.show()
@@ -143,10 +168,40 @@ class TrayUiArchitectureTests(unittest.TestCase):
 
         self.assertFalse(self.tray.tray_panel.isVisible())
         self.assertFalse(self.tray.log_popup.isVisible())
-        self.assertFalse(self.tray.log_controller.reader.is_alive())
+        self.assertIsNone(self.tray.log_controller.reader)
         self.assertFalse(self.tray.lifecycle_controller.is_alive())
-        self.assertFalse(self.tray.pinned_logs.reader.is_alive())
-        self.assertTrue(all(not row.timer.isActive() for row in rows))
+        self.assertIsNone(self.tray.pinned_logs.reader)
+        self.assertFalse(self.tray.log_preference_owner.is_alive())
+        self.assertTrue(all(not hasattr(row, "timer") for row in rows))
+
+    def test_ui_release_requests_drain_and_final_shutdown_joins(self):
+        class RecordingPreferenceOwner:
+            def __init__(self):
+                self.calls = []
+
+            def request_shutdown(self):
+                self.calls.append("request_shutdown")
+
+            def shutdown(self):
+                self.calls.append("shutdown")
+
+        original = self.tray.log_preference_owner
+        recording = RecordingPreferenceOwner()
+        self.tray.log_preference_owner = recording
+        try:
+            self.tray.log_popup.hide()
+            self.assertEqual(self.tray.pinned_logs.count(), 0)
+
+            self.tray._release_idle_log_preferences()
+            self.assertEqual(recording.calls, ["request_shutdown"])
+
+            self.tray.shutdown_ui()
+            self.assertEqual(
+                recording.calls,
+                ["request_shutdown", "shutdown"],
+            )
+        finally:
+            original.shutdown()
 
     def test_context_activation_toggles_panel_and_internal_click_does_not_hide(self):
         reason = self.tray.ActivationReason.Context
@@ -205,11 +260,12 @@ class TrayUiArchitectureTests(unittest.TestCase):
         pinned = self.tray.pinned_logs.windows()[0]
         self.assertTrue(pinned.isVisible())
 
-        self.tray.app_context_popup.show_action(
+        self.tray.app_context_popup.show_actions(
             QPoint(300, 300),
-            text="Open terminal here",
-            callback=lambda: None,
-            enabled=True,
+            run_callback=lambda: None,
+            run_enabled=True,
+            terminal_callback=lambda: None,
+            terminal_enabled=True,
         )
         outside = QPushButton("outside")
         outside.show()
@@ -247,46 +303,66 @@ class TrayUiArchitectureTests(unittest.TestCase):
         row.manager.stop_all = blocking_stop
         row.btn_stop.setEnabled(True)
         gui_callback_ran = []
+        safety_release = threading.Timer(1.0, release.set)
         try:
-            began = time.perf_counter()
+            safety_release.start()
             row.on_stop()
             row.on_stop()
-            elapsed_ms = (time.perf_counter() - began) * 1000
-            self.assertLess(elapsed_ms, 20)
+            self.assertFalse(release.is_set(), "stop button waited for blocking work")
             self.assertTrue(started.wait(timeout=1))
 
-            QTimer.singleShot(10, lambda: gui_callback_ran.append(time.monotonic()))
+            QTimer.singleShot(0, lambda: gui_callback_ran.append(time.monotonic()))
             self.assertTrue(wait_until(lambda: bool(gui_callback_ran), timeout_ms=300))
+            self.assertFalse(release.is_set(), "GUI heartbeat ran only after stop completed")
             self.assertEqual(len(calls), 1)
             self.assertTrue(self.tray.lifecycle_controller.is_pending(row.manager.app_id))
         finally:
             release.set()
+            safety_release.cancel()
         self.assertTrue(
             wait_until(
                 lambda: not self.tray.lifecycle_controller.is_pending(row.manager.app_id)
             )
         )
 
-    def test_terminal_context_action_routes_to_exact_manager(self):
+    def test_app_context_routes_run_and_open_terminal_to_exact_manager(self):
         row = self.tray.row_widgets[0]
         row.manager.terminal_status = lambda: type(
             "Status", (), {"ok": True, "message": "ready"}
         )()
         calls = []
+        row.manager.run_with_terminal = lambda: (
+            calls.append(("run", row.manager.get_workdir()))
+            or type("Result", (), {"ok": True, "message": "started"})()
+        )
         row.manager.open_terminal = lambda: (
-            calls.append(row.manager.get_workdir())
+            calls.append(("open", row.manager.get_workdir()))
             or type("Result", (), {"ok": True, "message": "opened"})()
         )
         self.tray.show_panel()
+
         self.tray.show_app_context(row.manager, QPoint(400, 300))
         QApplication.processEvents()
         self.assertTrue(self.tray.app_context_popup.isVisible())
         QTest.mouseClick(
-            self.tray.app_context_popup.action_button,
+            self.tray.app_context_popup.run_button,
             Qt.MouseButton.LeftButton,
         )
         QApplication.processEvents()
-        self.assertEqual(calls, [row.manager.get_workdir()])
+
+        self.tray.show_app_context(row.manager, QPoint(400, 300))
+        QTest.mouseClick(
+            self.tray.app_context_popup.terminal_button,
+            Qt.MouseButton.LeftButton,
+        )
+        QApplication.processEvents()
+        self.assertEqual(
+            calls,
+            [
+                ("run", row.manager.get_workdir()),
+                ("open", row.manager.get_workdir()),
+            ],
+        )
         self.assertFalse(self.tray.app_context_popup.isVisible())
 
 

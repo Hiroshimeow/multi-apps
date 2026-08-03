@@ -377,13 +377,33 @@ class PinnedLogManager(QObject):
         self.screens_provider = screens_provider or (
             lambda: tuple(screen.availableGeometry() for screen in QGuiApplication.screens())
         )
-        self.reader = reader or MultiLogReader(parent=self)
+        self.reader = reader
+        self._owns_reader = reader is None
         self.sessions = OrderedDict()
         self._shutdown = False
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setInterval(int(refresh_interval_ms))
         self.refresh_timer.timeout.connect(self.refresh_all)
-        self.reader.snapshot_ready.connect(self._snapshot_ready)
+        if self.reader is not None:
+            self.reader.snapshot_ready.connect(self._snapshot_ready)
+
+    def _ensure_reader(self):
+        if self.reader is None:
+            self.reader = MultiLogReader(parent=self)
+            self.reader.snapshot_ready.connect(self._snapshot_ready)
+        return self.reader
+
+    def _release_reader(self):
+        if not self._owns_reader or self.reader is None:
+            return
+        reader = self.reader
+        try:
+            reader.snapshot_ready.disconnect(self._snapshot_ready)
+        except (TypeError, RuntimeError):
+            pass
+        self.reader = None
+        reader.shutdown()
+        reader.deleteLater()
 
     @staticmethod
     def key_for(target, stream):
@@ -420,6 +440,7 @@ class PinnedLogManager(QObject):
         window.panel.set_pin_state(True)
         session = _PinnedSession(key, target, stream, window)
         self.sessions[key] = session
+        self._ensure_reader()
         window.close_requested.connect(lambda current=key: self.unpin(current))
         window.panel.pin_changed.connect(
             lambda pinned, current=key: None if pinned else self.unpin(current)
@@ -442,11 +463,13 @@ class PinnedLogManager(QObject):
         session = self.sessions.pop(normalized, None)
         if session is None:
             return False
-        self.reader.remove(normalized)
+        if self.reader is not None:
+            self.reader.remove(normalized)
         session.window.hide()
         session.window.deleteLater()
         if not self.sessions:
             self.refresh_timer.stop()
+            self._release_reader()
         self.changed.emit()
         return True
 
@@ -477,7 +500,7 @@ class PinnedLogManager(QObject):
     def _request(self, session, *, reset_bottom=False):
         stream_key = "out" if session.stream == "stdout" else "err"
         manager = session.target.manager
-        request_id = self.reader.request(
+        request_id = self._ensure_reader().request(
             session.key,
             lambda current=manager, selected=stream_key: current.get_log_path(selected),
             max_lines=session.window.panel.line_count.value(),
@@ -581,11 +604,14 @@ class PinnedLogManager(QObject):
             return
         self._shutdown = True
         self.refresh_timer.stop()
-        try:
-            self.reader.snapshot_ready.disconnect(self._snapshot_ready)
-        except (TypeError, RuntimeError):
-            pass
-        self.reader.shutdown()
+        reader = self.reader
+        self.reader = None
+        if reader is not None:
+            try:
+                reader.snapshot_ready.disconnect(self._snapshot_ready)
+            except (TypeError, RuntimeError):
+                pass
+            reader.shutdown()
         for session in tuple(self.sessions.values()):
             session.window.hide()
             session.window.deleteLater()

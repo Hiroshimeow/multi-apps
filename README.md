@@ -63,6 +63,8 @@ acquire single-instance lock
 
 `multi_run` chỉ cho phép người dùng tạo thêm run bằng thao tác Start chủ động; nó không cho phép launcher tạo duplicate trong startup pass.
 
+Các nguồn Start từ tray, auto-start, CLI và TUI đi qua cùng một reservation path. Với non-`multi_run`, launcher giữ app lock ngắn chỉ đến khi run `Starting` đã được ghi bền vững, nên hai request đồng thời hội tụ thành đúng một run. `multi_run: true` vẫn cho phép nhiều Start chủ động có chủ đích.
+
 ## Cấu hình
 
 `setting.yaml.sample` trong repository khai báo **tường minh toàn bộ field được hỗ trợ** cho từng app, kể cả khi giá trị bằng default. `setting.yaml` là cấu hình riêng của từng máy và bị Git bỏ qua. Khi cài mới, copy sample thành `setting.yaml`; khi thêm app, copy một block hiện có và giữ đủ các field.
@@ -131,7 +133,8 @@ Các path tương đối được resolve từ thư mục chứa file config.
 Chuột phải icon tray mở `TrayPanelWindow`, một cửa sổ Qt độc lập thay vì nhét widget tương tác vào `QMenu`. Tray panel được đặt sát mép phải của usable screen đang chứa tray icon.
 
 - nhấp trái tên app để mở working directory của app;
-- nhấp phải tên app, phím Menu hoặc `Shift+F10` mở popup riêng có **Open terminal here**;
+- nhấp phải tên app, phím Menu hoặc `Shift+F10` mở popup riêng có **Run with terminal** và **Open terminal here**;
+- **Run with terminal** chạy `command + args` trong YAML bằng terminal độc lập, không tạo run ID và không thuộc quản lý Start/Stop/log của launcher;
 - terminal được khởi chạy với `cwd` đúng working directory của app, không thay đổi working directory toàn cục của launcher;
 - **Open Config** mở đúng file YAML mà launcher hiện tại đang dùng;
 - **Stop All Apps**, **Restart Launcher** và **Exit Launcher** giữ nguyên chức năng tương ứng;
@@ -153,6 +156,27 @@ args:
 ```
 
 Các phần tử không bị parse thành token lần nữa. Quote, pipe và shell operator được giữ nguyên, ví dụ `"--title \"Two words\""` hoặc `"&& echo done"`. Vì vậy cần viết đúng cú pháp mà shell đích sẽ nhận.
+
+Cùng cơ chế này dùng được cho CLI bất kỳ, không cần adapter riêng:
+
+```yaml
+- name: "Codex task"
+  path: "E:/work/project"
+  command: "codex"
+  args:
+    - "--model gpt-5"
+    - "--sandbox workspace-write"
+    - 'exec "Fix the failing tests"'
+
+- name: "Gemini review"
+  path: "E:/work/project"
+  command: "gemini"
+  args:
+    - "--model gemini-2.5-pro"
+    - '--prompt "Review this repository"'
+```
+
+Đây chỉ là ví dụ `command + args`; launcher không gọi API và không có logic riêng cho Codex hoặc Gemini.
 
 ## Chỉnh args cho một run
 
@@ -198,6 +222,10 @@ Launcher phù hợp với phần lớn ứng dụng có thể khởi động b�
 ## Runtime registry và log
 
 Runtime records nằm trong `.runtime/` và được ghi atomic. Chúng lưu `run_id`, supervisor/root identity, state, command, args, timestamps và log paths để launcher mới reconnect an toàn.
+
+`.runtime/hot-index-v1.json` là index dẫn xuất nhỏ chỉ chứa run active và run mới nhất theo app. Status, duplicate check, auto-start, Stop, reconnect và reconciliation đọc index rồi mở đúng run record cần thiết, không quét toàn bộ lịch sử ở hot path. Nếu index thiếu, hỏng, có dirty marker hoặc cũ hơn runtime records, launcher tự rebuild một lần từ các full record. Full run record và process identity đã xác minh vẫn là nguồn sự thật cho Stop và recovery; xóa index không làm mất lịch sử.
+
+Tray chỉ theo dõi runtime khi panel đang hiện: một directory watcher, debounce 100 ms và fallback 3 giây. Khi panel ẩn, watcher không giữ path, các timer status dừng và không có status polling. Pinned log vẫn chỉ chạy reader riêng của chính cửa sổ pin, không kích hoạt global runtime refresh.
 
 Mỗi run có hai file log riêng:
 

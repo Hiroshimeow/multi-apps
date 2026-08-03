@@ -15,6 +15,7 @@ class PublicDocumentationContractTests(unittest.TestCase):
         for required in (
             "Open Config",
             "nhấp trái tên app",
+            "Run with terminal",
             "Open terminal here",
             "outside click",
             "background command worker",

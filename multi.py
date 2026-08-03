@@ -45,6 +45,7 @@ from lib.ui.lifecycle_commands import LifecycleCommandController
 from lib.ui.log_hover import LogHoverController
 from lib.ui.log_popup import LogPopupWindow
 from lib.ui.pinned_logs import PinnedLogManager
+from lib.ui.runtime_refresh import RuntimeRefreshCoordinator
 from lib.ui.tray_panel import TrayPanelWindow
 from lib.ui.transient_ui import TransientUiController
 from lib.utils import is_windows, is_linux
@@ -194,16 +195,17 @@ class AppManager:
     def startup_auto_start_suppressed(self):
         return self.app_id in self._startup_auto_start_suppressed_ids
 
-    def can_start_manually(self):
+    def can_start_manually(self, status_info=None):
         if self.app_config.get("multi_run", False):
             return True
-        return self.get_status_info().get("status", "STOPPED") == "STOPPED"
+        status_info = status_info or self.get_status_info()
+        return status_info.get("status", "STOPPED") == "STOPPED"
 
-    def launch(self, *, manual=False, parent=None):
+    def launch(self, *, manual=False, parent=None, status_info=None):
         """Start without blocking Qt; edit args only for a manual GUI request."""
         args_override = None
         if manual:
-            if not self.can_start_manually():
+            if not self.can_start_manually(status_info):
                 return False, "Start is blocked by an active or orphaned run"
             if self.app_config.get("args_edit", False):
                 # Dequeue this app from the one-shot startup auto-start before
@@ -344,6 +346,13 @@ class AppManager:
     def open_terminal(self):
         return self.tool_service.open_terminal(self.get_workdir())
 
+    def run_with_terminal(self):
+        command = CommandRunner.build_command_text(
+            self.app_config["command"],
+            self.app_config.get("args", []),
+        )
+        return self.tool_service.open_terminal(self.get_workdir(), command)
+
     def get_log_path(self, stream):
         """Return the newest active, otherwise newest historical, run log path."""
         status_info = self.get_status_info()
@@ -436,6 +445,7 @@ class SystemTrayApp(QSystemTrayIcon):
         self.instance_lock = instance_lock
         self._restart_requested = False
         self._ui_shutdown = False
+        self.status_snapshot_count = 0
         self.load_config()
 
         self.tray_panel = TrayPanelWindow()
@@ -456,8 +466,19 @@ class SystemTrayApp(QSystemTrayIcon):
             parent=self,
         )
         self.pinned_logs.changed.connect(self._pinned_logs_changed)
+        self.log_controller.viewer_closed.connect(self._log_viewer_closed)
         self.lifecycle_controller.command_finished.connect(self._lifecycle_finished)
         self.tray_panel.hidden.connect(self._tray_panel_hidden)
+        runtime_dir = getattr(
+            self.controller.session_manager,
+            "runtime_dir",
+            Path(self.config_path).parent / ".runtime",
+        )
+        self.runtime_refresh = RuntimeRefreshCoordinator(
+            runtime_dir,
+            self.refresh_status_snapshot,
+            parent=self,
+        )
         self.transient_ui = TransientUiController(
             windows_provider=self._protected_windows,
             dismiss_callback=self.hide_transient_ui,
@@ -551,6 +572,7 @@ class SystemTrayApp(QSystemTrayIcon):
         ]
         for row in self.row_widgets:
             row.context_requested.connect(self.show_app_context)
+            row.refresh_requested.connect(self._row_refresh_requested)
         if self.row_widgets:
             rows = self.row_widgets
         else:
@@ -620,23 +642,41 @@ class SystemTrayApp(QSystemTrayIcon):
         )
 
     def _tray_panel_hidden(self):
+        self.runtime_refresh.stop()
         self.log_controller.hide_popup()
         self.app_context_popup.hide()
+        self._release_idle_log_preferences()
+        self._sync_transient_activity()
 
     def hide_transient_ui(self):
         self.app_context_popup.hide()
         self.log_controller.hide_popup()
         self.tray_panel.hide()
+        self._release_idle_log_preferences()
+        self._sync_transient_activity()
 
     def show_app_context(self, manager, global_pos):
         status = manager.terminal_status()
-        self.app_context_popup.show_action(
+        self.app_context_popup.show_actions(
             global_pos,
-            text="Open terminal here",
-            callback=lambda current=manager: self._open_terminal(current),
-            enabled=status.ok,
-            tooltip=status.message,
+            run_callback=lambda current=manager: self._run_with_terminal(current),
+            run_enabled=status.ok,
+            run_tooltip=status.message,
+            terminal_callback=lambda current=manager: self._open_terminal(current),
+            terminal_enabled=status.ok,
+            terminal_tooltip=status.message,
         )
+        self._sync_transient_activity()
+
+    def _run_with_terminal(self, manager):
+        result = manager.run_with_terminal()
+        if not result.ok:
+            self.showMessage(
+                "Run with terminal failed",
+                f"{manager.name}: {result.message}",
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000,
+            )
 
     def _open_terminal(self, manager):
         result = manager.open_terminal()
@@ -659,17 +699,21 @@ class SystemTrayApp(QSystemTrayIcon):
             )
         else:
             self.pinned_logs.unpin(key)
+        self._sync_transient_activity()
         return True
 
     def _pinned_logs_changed(self):
         self.log_controller.refresh_pin_state()
         self.log_controller.reposition_popup()
+        self._release_idle_log_preferences()
+        self._sync_transient_activity()
+
+    def _log_viewer_closed(self):
+        self._release_idle_log_preferences()
+        self._sync_transient_activity()
 
     def _lifecycle_finished(self, app_id, ok, result):
-        for row in self.row_widgets:
-            if str(row.manager.app_id) == str(app_id):
-                row.update_ui()
-                break
+        self._refresh_visible((str(app_id),))
         if not ok:
             message = str(result)
             self.showMessage(
@@ -679,17 +723,56 @@ class SystemTrayApp(QSystemTrayIcon):
                 5000,
             )
 
+    def _row_refresh_requested(self, app_id):
+        self._refresh_visible((str(app_id),))
+
+    def _refresh_visible(self, app_ids=None):
+        if self.tray_panel.isVisible():
+            return self.refresh_status_snapshot(app_ids)
+        return None
+
+    def refresh_status_snapshot(self, app_ids=None):
+        self.status_snapshot_count += 1
+        requested = tuple(
+            str(value)
+            for value in (
+                app_ids
+                if app_ids is not None
+                else (manager.app_id for manager in self.managers)
+            )
+        )
+        snapshot = self.controller.get_status_snapshot(requested)
+        requested_set = set(requested)
+        for row in self.row_widgets:
+            app_id = str(row.manager.app_id)
+            if app_ids is None or app_id in requested_set:
+                row.apply_status(
+                    snapshot.get(app_id, {"status": "STOPPED", "instances": 0})
+                )
+        return snapshot
+
+    def _release_idle_log_preferences(self):
+        if self.log_popup.isVisible() or self.pinned_logs.count():
+            return
+        self.log_preference_owner.request_shutdown()
+
+    def _sync_transient_activity(self):
+        transient = getattr(self, "transient_ui", None)
+        if transient is not None:
+            transient.sync_activity()
+
     def show_panel(self):
         anchor, available = self._tray_anchor_and_screen()
-        for row in self.row_widgets:
-            row.update_ui()
+        self.refresh_status_snapshot()
         self.tray_panel.show_at(
             anchor,
             available,
             reserved_top_height=self.log_popup.reserved_height,
         )
+        self.runtime_refresh.start()
         self.pinned_logs.ensure_visible_all()
         self.log_controller.reposition_popup()
+        self._sync_transient_activity()
 
     def toggle_panel(self):
         if self.tray_panel.isVisible():
@@ -714,8 +797,14 @@ class SystemTrayApp(QSystemTrayIcon):
 
     def show_toast(self):
         active_apps = []
+        snapshot = self.controller.get_status_snapshot(
+            tuple(manager.app_id for manager in self.managers)
+        )
         for mgr in self.managers:
-            status_info = mgr.get_status_info()
+            status_info = snapshot.get(
+                mgr.app_id,
+                {"status": "STOPPED", "instances": 0},
+            )
             status = status_info.get("status", "STOPPED")
             if status != "STOPPED":
                 active_apps.append(
@@ -760,7 +849,11 @@ class SystemTrayApp(QSystemTrayIcon):
         )
 
     def _capture_launcher_ui_activity(self):
-        snapshot = {"auto_start": None, "ui_timers": []}
+        snapshot = {
+            "auto_start": None,
+            "runtime_refresh": None,
+            "ui_timers": [],
+        }
         if hasattr(self, "auto_start_timer"):
             timer = self.auto_start_timer
             active = timer.isActive()
@@ -768,6 +861,12 @@ class SystemTrayApp(QSystemTrayIcon):
             snapshot["auto_start"] = (timer, active, remaining_ms)
 
         timers = []
+        runtime_refresh = getattr(self, "runtime_refresh", None)
+        if runtime_refresh is not None:
+            snapshot["runtime_refresh"] = (
+                runtime_refresh,
+                runtime_refresh.is_active,
+            )
         if hasattr(self, "tray_panel"):
             timers.extend(self.tray_panel.findChildren(QTimer))
         if hasattr(self, "log_controller"):
@@ -785,6 +884,9 @@ class SystemTrayApp(QSystemTrayIcon):
         auto_start = snapshot["auto_start"]
         if auto_start is not None:
             auto_start[0].stop()
+        runtime_refresh = getattr(self, "runtime_refresh", None)
+        if runtime_refresh is not None:
+            runtime_refresh.stop()
         for timer, _was_active in snapshot["ui_timers"]:
             timer.stop()
         return snapshot
@@ -799,6 +901,11 @@ class SystemTrayApp(QSystemTrayIcon):
         for timer, was_active in snapshot.get("ui_timers", []):
             if was_active:
                 timer.start()
+        runtime_refresh = snapshot.get("runtime_refresh")
+        if runtime_refresh is not None:
+            coordinator, was_active = runtime_refresh
+            if was_active:
+                coordinator.start()
 
     def shutdown_ui(self):
         if getattr(self, "_ui_shutdown", False):
@@ -807,6 +914,9 @@ class SystemTrayApp(QSystemTrayIcon):
         auto_start = getattr(self, "auto_start_timer", None)
         if auto_start is not None:
             auto_start.stop()
+        runtime_refresh = getattr(self, "runtime_refresh", None)
+        if runtime_refresh is not None:
+            runtime_refresh.stop()
         transient = getattr(self, "transient_ui", None)
         if transient is not None:
             transient.shutdown()

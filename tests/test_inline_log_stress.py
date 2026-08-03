@@ -157,7 +157,9 @@ class IndependentLogLifecycleStressTests(unittest.TestCase):
                 len(self.tray.log_popup.findChildren(InlineLogPanel)), 1
             )
             self.assertEqual(len(controller.findChildren(QTimer)), 3)
-            self.assertTrue(all(item.timer.isActive() for item in self.tray.row_widgets))
+            self.assertTrue(
+                all(not hasattr(item, "timer") for item in self.tray.row_widgets)
+            )
             self.assertTrue(controller.reader.is_alive())
 
         writer.join(timeout=5.0)
@@ -189,8 +191,8 @@ class IndependentLogLifecycleStressTests(unittest.TestCase):
         self.assertFalse(controller.hide_timer.isActive())
         self.assertFalse(controller.open_timer.isActive())
         self.assertIsNone(controller.current_target)
-        self.assertFalse(controller.reader.is_alive())
-        self.assertTrue(all(not item.timer.isActive() for item in rows))
+        self.assertIsNone(controller.reader)
+        self.assertTrue(all(not hasattr(item, "timer") for item in rows))
 
 
 if __name__ == "__main__":

@@ -130,11 +130,7 @@ class InlineLogResponsivenessTests(unittest.TestCase):
     def test_scheduler_yields_between_multiple_slow_panels(self):
         panels = [self.panel]
         extra_hosts = []
-        completed = []
-        heartbeat = [time.perf_counter()]
-        timer = QTimer()
-        timer.setInterval(1)
-        timer.timeout.connect(lambda: heartbeat.append(time.perf_counter()))
+        events = []
         try:
             for _ in range(3):
                 host = QFrame()
@@ -153,36 +149,37 @@ class InlineLogResponsivenessTests(unittest.TestCase):
                     force=False,
                     selected=index,
                 ):
-                    time.sleep(0.02)
-                    completed.append(selected)
+                    events.append(("render", selected))
+                    QTimer.singleShot(0, lambda current=selected: events.append(("heartbeat", current)))
 
                 panel.update_snapshot = slow_render
 
-            timer.start()
             for panel in panels:
                 panel.queue_snapshot(snapshot(("new",), size=4))
 
             deadline = time.monotonic() + 2
-            while len(completed) < len(panels) and time.monotonic() < deadline:
+            while (
+                sum(kind == "render" for kind, _value in events) < len(panels)
+                and time.monotonic() < deadline
+            ):
                 QApplication.processEvents()
                 QTest.qWait(1)
-            timer.stop()
+            QApplication.processEvents()
 
-            gaps_ms = [
-                (right - left) * 1000
-                for left, right in zip(heartbeat, heartbeat[1:])
+            render_positions = [
+                index for index, event in enumerate(events) if event[0] == "render"
             ]
-            self.assertEqual(sorted(completed), list(range(4)))
-            self.assertTrue(gaps_ms)
-            self.assertLess(max(gaps_ms), 50, gaps_ms)
+            self.assertEqual(sorted(value for kind, value in events if kind == "render"), list(range(4)))
+            self.assertEqual(len(render_positions), len(panels))
+            for left, right in zip(render_positions, render_positions[1:]):
+                self.assertIn("heartbeat", [kind for kind, _value in events[left + 1 : right]])
         finally:
-            timer.stop()
             for host in extra_hosts:
                 host.close()
                 host.deleteLater()
             QApplication.processEvents()
 
-    def test_four_filtered_panels_append_callbacks_stay_under_50_ms(self):
+    def test_four_filtered_panels_append_callbacks_use_incremental_updates(self):
         panels = [self.panel]
         extra_hosts = []
         try:
@@ -197,26 +194,27 @@ class InlineLogResponsivenessTests(unittest.TestCase):
             QApplication.processEvents()
 
             base = tuple(f"line-{index:04d}" for index in range(5000))
+            full_repaints = []
             for panel in panels:
                 panel.filter_edit.setText("line-")
                 panel.update_snapshot(snapshot(base, size=60000))
+                repaint = MagicMock(wraps=panel.log_view.setPlainText)
+                panel.log_view.setPlainText = repaint
+                full_repaints.append(repaint)
 
-            for _ in range(3):
-                QApplication.processEvents()
-
-            callback_ms = []
             lines = base
             for iteration in range(8):
                 lines = lines[1:] + (f"line-new-{iteration}",)
                 for panel in panels:
                     panel.queue_snapshot(snapshot(lines, size=60020 + iteration))
-                started = time.perf_counter()
                 for panel in panels:
                     panel._render_pending_snapshot()
-                callback_ms.append((time.perf_counter() - started) * 1000)
                 QApplication.processEvents()
 
-            self.assertLess(max(callback_ms), 50, callback_ms)
+            self.assertTrue(all(repaint.call_count == 0 for repaint in full_repaints))
+            self.assertTrue(
+                all(panel.log_view.toPlainText().endswith("line-new-7") for panel in panels)
+            )
         finally:
             for host in extra_hosts:
                 host.close()

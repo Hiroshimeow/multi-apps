@@ -88,10 +88,30 @@ class LifecycleCommandController(QObject):
 
     def __init__(self, *, executor=None, parent=None):
         super().__init__(parent)
-        self.executor = executor or BackgroundCommandExecutor(parent=self)
+        self.executor = executor
+        self._owns_executor = executor is None
         self._pending = set()
         self._shutdown = False
-        self.executor.finished.connect(self._on_finished)
+        if self.executor is not None:
+            self.executor.finished.connect(self._on_finished)
+
+    def _ensure_executor(self):
+        if self.executor is None:
+            self.executor = BackgroundCommandExecutor(parent=self)
+            self.executor.finished.connect(self._on_finished)
+        return self.executor
+
+    def _release_idle_executor(self):
+        if not self._owns_executor or self.executor is None or self._pending:
+            return
+        executor = self.executor
+        try:
+            executor.finished.disconnect(self._on_finished)
+        except (TypeError, RuntimeError):
+            pass
+        self.executor = None
+        executor.shutdown()
+        executor.deleteLater()
 
     @staticmethod
     def _app_id(manager):
@@ -104,7 +124,7 @@ class LifecycleCommandController(QObject):
         if not app_id or app_id in self._pending:
             return False
         self._pending.add(app_id)
-        accepted = self.executor.submit(app_id, manager.stop_all)
+        accepted = self._ensure_executor().submit(app_id, manager.stop_all)
         if not accepted:
             self._pending.discard(app_id)
             return False
@@ -127,6 +147,7 @@ class LifecycleCommandController(QObject):
         self._pending.discard(app_id)
         self.pending_changed.emit(app_id, False)
         self.command_finished.emit(app_id, bool(ok), result)
+        self._release_idle_executor()
 
     def is_pending(self, app_id):
         return str(app_id) in self._pending
@@ -138,15 +159,19 @@ class LifecycleCommandController(QObject):
         if self._shutdown:
             return
         self._shutdown = True
-        try:
-            self.executor.finished.disconnect(self._on_finished)
-        except (TypeError, RuntimeError):
-            pass
+        executor = self.executor
+        if executor is not None:
+            try:
+                executor.finished.disconnect(self._on_finished)
+            except (TypeError, RuntimeError):
+                pass
         self._pending.clear()
-        self.executor.shutdown()
+        self.executor = None
+        if executor is not None:
+            executor.shutdown()
 
     def is_alive(self):
-        return self.executor.is_alive()
+        return self.executor is not None and self.executor.is_alive()
 
 
 __all__ = ["BackgroundCommandExecutor", "LifecycleCommandController"]

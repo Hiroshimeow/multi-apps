@@ -58,15 +58,18 @@ class LatestLogReaderTests(unittest.TestCase):
         reader = LatestLogReader(backend)
         results = []
         reader.snapshot_ready.connect(lambda request_id, snapshot: results.append((request_id, snapshot)))
+        safety_release = threading.Timer(1.0, backend.release_first.set)
         try:
             first_id = reader.request("first.log", max_lines=100, max_bytes=1024)
             self.assertTrue(backend.first_started.wait(timeout=1))
 
-            started = time.perf_counter()
+            safety_release.start()
             reader.request("second.log", max_lines=100, max_bytes=1024)
             latest_id = reader.request("third.log", max_lines=5000, max_bytes=2048)
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            self.assertLess(elapsed_ms, 20)
+            self.assertFalse(
+                backend.release_first.is_set(),
+                "request waited for the running filesystem read",
+            )
 
             backend.release_first.set()
             self.assertTrue(wait_until(lambda: len(results) == 1))
@@ -79,6 +82,8 @@ class LatestLogReaderTests(unittest.TestCase):
             self.assertEqual(results[0][0], latest_id)
             self.assertEqual(results[0][1].lines, ("third.log",))
         finally:
+            backend.release_first.set()
+            safety_release.cancel()
             reader.shutdown()
         self.assertFalse(reader.is_alive())
 
@@ -290,7 +295,7 @@ class LogHoverControllerTests(unittest.TestCase):
                 popup.deleteLater()
                 QApplication.processEvents()
 
-    def test_late_leave_from_previous_button_does_not_cancel_new_hover_owner(self):
+    def test_hover_is_inert_and_explicit_open_switches_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             first_path = root / "first.log"
@@ -319,11 +324,22 @@ class LogHoverControllerTests(unittest.TestCase):
             )
             try:
                 controller.open_target(first, "stdout")
-                self.assertTrue(wait_until(lambda: controller.current_target is first))
+                self.assertTrue(
+                    wait_until(
+                        lambda: controller.current_target is first
+                        and popup.panel.log_view.toPlainText() == "first"
+                    )
+                )
 
                 controller.hover_enter(second, "stderr")
                 controller.hover_leave(first, "stdout")
+                QApplication.processEvents()
 
+                self.assertIs(controller.current_target, first)
+                self.assertEqual(controller.current_stream, "stdout")
+                self.assertEqual(popup.panel.log_view.toPlainText(), "first")
+
+                controller.open_target(second, "stderr")
                 self.assertTrue(
                     wait_until(
                         lambda: controller.current_target is second
@@ -336,7 +352,7 @@ class LogHoverControllerTests(unittest.TestCase):
                 popup.deleteLater()
                 QApplication.processEvents()
 
-    def test_rapid_hover_opens_only_latest_target_in_one_popup(self):
+    def test_rapid_hover_does_no_log_work_until_explicit_open(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             first_out = root / "first.out.log"
@@ -367,7 +383,14 @@ class LogHoverControllerTests(unittest.TestCase):
                 controller.hover_enter(first, "stdout")
                 controller.hover_leave(first, "stdout")
                 controller.hover_enter(second, "stderr")
+                QApplication.processEvents()
 
+                self.assertIsNone(controller.current_target)
+                self.assertIsNone(controller.reader)
+                self.assertFalse(popup.isVisible())
+                self.assertEqual(popup.panel.log_view.toPlainText(), "")
+
+                controller.open_target(second, "stderr")
                 self.assertTrue(
                     wait_until(
                         lambda: popup.panel.log_view.toPlainText() == "second-error"
@@ -378,13 +401,14 @@ class LogHoverControllerTests(unittest.TestCase):
                 self.assertTrue(popup.isVisible())
                 self.assertEqual(popup.panel.stream_label.text(), "stderr")
 
-                controller.hover_leave(second, "stderr")
-                self.assertTrue(wait_until(lambda: not popup.isVisible()))
+                controller.hide_popup()
+                self.assertFalse(popup.isVisible())
+                self.assertIsNone(controller.reader)
             finally:
                 controller.shutdown()
                 popup.deleteLater()
                 QApplication.processEvents()
-            self.assertFalse(controller.reader.is_alive())
+            self.assertIsNone(controller.reader)
 
 
 if __name__ == "__main__":
