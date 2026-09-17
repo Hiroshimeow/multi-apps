@@ -13,8 +13,10 @@ DEFAULT_GLOBAL_CONFIG = {
     "log_dir": "./logs",
     "session": "subprocess",
     "multi_run": False,
+    "environment": "app",
 }
 DEFAULT_CLOSE_TIMEOUT = 5.0
+ENVIRONMENT_MODES = frozenset({"app", "launcher"})
 
 
 def slugify_app_id(value: str) -> str:
@@ -62,6 +64,13 @@ class ConfigManager:
         for key in DEFAULT_GLOBAL_CONFIG:
             if key in raw_global:
                 global_config[key] = raw_global[key]
+        environment = str(global_config.get("environment") or "app").strip().lower()
+        if environment not in ENVIRONMENT_MODES:
+            print_warning(
+                f"Invalid global environment '{environment}'; using 'app'."
+            )
+            environment = "app"
+        global_config["environment"] = environment
         global_config["_config_dir"] = self.config_dir
 
         apps = []
@@ -115,6 +124,17 @@ class ConfigManager:
             )
             close_timeout = DEFAULT_CLOSE_TIMEOUT
 
+        environment = str(
+            raw_app.get("environment", global_config["environment"]) or ""
+        ).strip().lower()
+        if environment not in ENVIRONMENT_MODES:
+            fallback = global_config["environment"]
+            print_warning(
+                f"Invalid environment for '{safe_name}': '{environment}'; "
+                f"using '{fallback}'."
+            )
+            environment = fallback
+
         return {
             "id": app_id,
             "name": safe_name,
@@ -124,6 +144,7 @@ class ConfigManager:
             "enabled": bool(raw_app.get("enabled", True)),
             "auto_start": bool(raw_app.get("auto_start", False)),
             "multi_run": bool(raw_app.get("multi_run", global_config["multi_run"])),
+            "environment": environment,
             "args_edit": bool(raw_app.get("args_edit", False)),
             "close_timeout": close_timeout,
             "os": raw_app.get("os"),

@@ -39,6 +39,7 @@ class RuntimeRegistryTests(unittest.TestCase):
                 path="C:/demo",
                 command="python main.py",
                 args=["--name exact value"],
+                environment="launcher",
                 stdout_path="out.log",
                 stderr_path="err.log",
                 run_id="run-1",

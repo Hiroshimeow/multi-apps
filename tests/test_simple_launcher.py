@@ -47,7 +47,29 @@ apps:
                 runner.build_command(),
                 "uv run main.py --repo E:/python_project",
             )
-            self.assertTrue(runner.should_use_shell())
+            self.assertEqual(app["environment"], "app")
+
+    def test_environment_global_default_and_app_override(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_file = Path(temp_dir) / "setting.yaml"
+            config_file.write_text(
+                """
+global:
+  environment: launcher
+apps:
+  - name: Shared
+    command: python shared.py
+  - name: Isolated
+    command: uv run main.py
+    environment: app
+""".strip(),
+                encoding="utf-8",
+            )
+
+            manager = ConfigManager(config_file)
+            self.assertEqual(manager.get_global("environment"), "launcher")
+            self.assertEqual(manager.get_app("Shared")["environment"], "launcher")
+            self.assertEqual(manager.get_app("Isolated")["environment"], "app")
 
     def test_name_and_command_are_required(self):
         with tempfile.TemporaryDirectory() as temp_dir:

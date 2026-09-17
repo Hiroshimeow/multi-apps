@@ -10,6 +10,7 @@ from pathlib import Path
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ready-file", required=True)
+    parser.add_argument("--app-id", required=True)
     parser.add_argument("--path", default="")
     parser.add_argument("--command", required=True)
     return parser.parse_args()
@@ -24,10 +25,13 @@ def main() -> int:
             return 125
         time.sleep(0.01)
 
+    child_env = os.environ.copy()
+    child_env["MULTI_RUN_APP_ID"] = args.app_id
     creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     process = subprocess.Popen(
         args.command,
         cwd=args.path or None,
+        env=child_env,
         stdin=subprocess.DEVNULL,
         shell=True,
         creationflags=creationflags,

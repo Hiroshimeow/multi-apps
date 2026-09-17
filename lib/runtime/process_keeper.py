@@ -19,6 +19,40 @@ from .process_identity import get_process_created_at
 from .registry import RuntimeRegistry
 
 
+def build_child_environment(parent_env=None, mode="app"):
+    """Build either a repo-local app environment or the launcher's environment."""
+    env = dict(os.environ if parent_env is None else parent_env)
+    mode = str(mode or "app").strip().lower()
+    if mode not in {"app", "launcher"}:
+        raise ValueError(f"Invalid environment mode: {mode}")
+
+    nested_uv = bool(
+        env.get("UV_RUN_RECURSION_DEPTH") or env.get("UV_INTERNAL__PYTHONHOME")
+    )
+    if nested_uv:
+        for key in ("PYTHONHOME", "UV_INTERNAL__PYTHONHOME", "UV_RUN_RECURSION_DEPTH"):
+            env.pop(key, None)
+        if mode == "app":
+            env.pop("VIRTUAL_ENV", None)
+
+    pythonpath = env.get("PYTHONPATH")
+    if pythonpath:
+        parts = pythonpath.split(os.pathsep)
+        launcher_root = str(Path(__file__).resolve().parents[2])
+        if parts and os.path.normcase(os.path.abspath(parts[0])) == os.path.normcase(
+            os.path.abspath(launcher_root)
+        ):
+            remaining = os.pathsep.join(parts[1:])
+            if remaining:
+                env["PYTHONPATH"] = remaining
+            else:
+                env.pop("PYTHONPATH", None)
+
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
 class WindowsJobObject:
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
     JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
@@ -270,9 +304,9 @@ class ProcessKeeper:
         command = " ".join(
             [self.record.command, *[str(value) for value in self.record.args if str(value)]]
         )
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PYTHONUTF8"] = "1"
+        env = build_child_environment(mode=self.record.environment)
+        env["MULTI_RUN_APP_ID"] = self.record.app_id
+        env["MULTI_RUN_RUN_ID"] = self.run_id
 
         if self.is_windows:
             assert self.job is not None
@@ -289,6 +323,8 @@ class ProcessKeeper:
                 "lib.runtime.process_bootstrap",
                 "--ready-file",
                 str(self.ready_file),
+                "--app-id",
+                self.record.app_id,
                 "--path",
                 self.record.path or "",
                 "--command",

@@ -67,7 +67,7 @@ Các nguồn Start từ tray, auto-start, CLI và TUI đi qua cùng một reserv
 
 ## Cấu hình
 
-`setting.yaml.sample` trong repository khai báo **tường minh toàn bộ field được hỗ trợ** cho từng app, kể cả khi giá trị bằng default. `setting.yaml` là cấu hình riêng của từng máy và bị Git bỏ qua. Khi cài mới, copy sample thành `setting.yaml`; khi thêm app, copy một block hiện có và giữ đủ các field.
+`setting.yaml.sample` trong repository mô tả các field được hỗ trợ và default khuyến nghị. `setting.yaml` là cấu hình riêng của từng máy và bị Git bỏ qua. Khi cài mới, copy sample thành `setting.yaml`; app chỉ cần override các field khác global/default.
 
 Mỗi app bắt buộc có `name` và `command`. `path` là working directory, tương đương việc `cd` vào thư mục trước khi chạy command.
 
@@ -78,6 +78,7 @@ global:
   log_dir: "./logs"
   session: "subprocess"
   multi_run: false
+  environment: "app"
 
 apps:
   - id: "auto-suggest"
@@ -114,6 +115,7 @@ uv run main.py --repo E:/python_project --port 8000
 | `enabled` | `true` | Cho phép app xuất hiện và được điều khiển. |
 | `auto_start` | `false` | Tự Start một lần sau reconciliation nếu không có run active/orphaned. |
 | `multi_run` | giá trị global | Cho phép các thao tác Start chủ động tạo nhiều run. |
+| `environment` | giá trị global | `app`: environment sạch theo repo/working directory; `launcher`: kế thừa environment của multi-run-apps. |
 | `args_edit` | `false` | Mở argument editor chỉ khi Start thủ công từ tray GUI. |
 | `close_timeout` | `5.0` giây | Thời gian graceful Stop trước khi force-close complete tree. Phải lớn hơn 0. |
 | `os` | mọi OS hỗ trợ | Lọc theo `win`, `windows`, `win10`, `win11`, `linux`, `ubuntu` hoặc `debian`. |
@@ -124,9 +126,20 @@ uv run main.py --repo E:/python_project --port 8000
 |---|---:|---|
 | `log_dir` | `"./logs"` | Thư mục log theo từng run; path tương đối tính từ thư mục chứa file YAML. |
 | `session` | `"subprocess"` | Backend chạy app. Dùng `"subprocess"` trên Windows/Linux; `"tmux"` chỉ có hiệu lực trên Linux. |
-| `multi_run` | `false` | Giá trị fallback cho app cũ không khai báo `multi_run`; file mẫu hiện khai báo lại field này ở từng app. |
+| `multi_run` | `false` | Giá trị fallback cho app không khai báo `multi_run`. |
+| `environment` | `"app"` | Default environment cho app chạy bằng backend `subprocess`; app có thể override thành `"launcher"`. |
+
+`environment: "app"` là lựa chọn mặc định và khuyến nghị. Launcher loại các biến runtime nội bộ của `uv run multi.py` trước khi chạy app, trong khi vẫn giữ `path` làm working directory; vì vậy `uv run ...` sẽ resolve Python/project environment của chính repo. `environment: "launcher"` giữ environment của multi-run-apps và phù hợp khi command dùng trực tiếp `python`, executable hoặc CLI đã cài trong launcher environment. Launcher không rewrite command: nếu command vẫn là `uv run ...`, `uv` vẫn có quyền resolve project theo `path`, nên không nên dùng cách đó để yêu cầu shared environment.
 
 Các path tương đối được resolve từ thư mục chứa file config.
+
+### Nhận diện process trên Windows
+
+Launcher dùng `id` hiện có của app làm process label; không cần thêm field cấu hình. Managed bootstrap mang `--app-id <id>` trong command line và app con kế thừa `MULTI_RUN_APP_ID` cùng `MULTI_RUN_RUN_ID`.
+
+Windows Task Manager không cho một launcher generic đổi image name của interpreter từ `python.exe` thành tên tùy ý mà không thay executable. Vì vậy để phân biệt các Python process, dùng **Details -> Command line** hoặc Process Explorer: bootstrap của mỗi run hiển thị `--app-id <id>`, còn Python của repo thường hiển thị path `.venv` và script. Dashboard vẫn là nguồn điều khiển chính: tên app, PID và Start/Stop/Stop All được map tới Job Object của run, không dựa vào tên `python.exe`.
+
+`PID` trong dashboard là PID đại diện ổn định của managed bootstrap, không nhất thiết là PID của Python cuối cùng do `uv` chạy. Trên Windows, một venv/uv-managed interpreter có thể xuất hiện thành nhiều `python.exe` trong process tree; toàn bộ cây vẫn thuộc cùng Job Object và được Stop cùng nhau.
 
 ## Thao tác trong tray
 

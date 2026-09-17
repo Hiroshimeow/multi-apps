@@ -28,6 +28,7 @@ class RunRecord:
     path: str
     command: str
     args: list[str] = field(default_factory=list)
+    environment: str = "app"
     keeper_pid: int = 0
     keeper_created_at: float = 0.0
     root_pid: int = 0
@@ -46,6 +47,7 @@ class RunRecord:
         self.path = str(self.path)
         self.command = str(self.command)
         self.args = [str(value) for value in self.args]
+        self.environment = str(self.environment or "app").strip().lower()
         self.keeper_pid = int(self.keeper_pid)
         self.keeper_created_at = float(self.keeper_created_at)
         self.root_pid = int(self.root_pid)
@@ -56,6 +58,8 @@ class RunRecord:
         self.exit_code = None if self.exit_code is None else int(self.exit_code)
         if self.close_timeout <= 0:
             raise ValueError("close_timeout must be positive")
+        if self.environment not in {"app", "launcher"}:
+            raise ValueError(f"Invalid environment mode: {self.environment}")
         if self.state not in RUN_STATES:
             raise ValueError(f"Invalid run state: {self.state}")
         if not self.app_id or not self.run_id:
@@ -69,6 +73,7 @@ class RunRecord:
         path: str,
         command: str,
         args: list[str] | None = None,
+        environment: str = "app",
         stdout_path: str = "",
         stderr_path: str = "",
         close_timeout: float = 5.0,
@@ -80,6 +85,7 @@ class RunRecord:
             path=path,
             command=command,
             args=list(args or []),
+            environment=environment,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             close_timeout=close_timeout,
@@ -95,6 +101,7 @@ class RunRecord:
             path=value.get("path", ""),
             command=value.get("command", ""),
             args=value.get("args") or [],
+            environment=value.get("environment", "app"),
             keeper_pid=value.get("keeper_pid", 0),
             keeper_created_at=value.get("keeper_created_at", 0.0),
             root_pid=value.get("root_pid", 0),

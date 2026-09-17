@@ -1,6 +1,3 @@
-import os
-
-
 class CommandRunner:
     """Run one terminal command from one working directory."""
 
@@ -36,12 +33,3 @@ class CommandRunner:
 
     def get_workdir(self):
         return self.app_config.get("path")
-
-    def get_env(self):
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PYTHONUTF8"] = "1"
-        return env
-
-    def should_use_shell(self):
-        return True

@@ -9,8 +9,55 @@ from pathlib import Path
 
 from lib.runtime.models import RunRecord
 from lib.runtime.process_identity import get_process_created_at, process_matches
-from lib.runtime.process_keeper import ProcessKeeper
+from lib.runtime.process_keeper import ProcessKeeper, build_child_environment
 from lib.runtime.registry import RuntimeRegistry
+
+
+class ChildEnvironmentTests(unittest.TestCase):
+    def test_nested_uv_runtime_variables_are_removed_for_app_process(self):
+        launcher_root = str(Path(__file__).resolve().parents[1])
+        parent = {
+            "PATH": "C:\\Tools",
+            "PYTHONHOME": "C:\\uv\\python314",
+            "UV_INTERNAL__PYTHONHOME": "C:\\uv\\python314",
+            "UV_RUN_RECURSION_DEPTH": "1",
+            "UV_THREADPOOL_SIZE": "16",
+            "VIRTUAL_ENV": str(Path(launcher_root) / ".venv"),
+            "PYTHONPATH": os.pathsep.join([launcher_root, "C:\\keep-me"]),
+        }
+
+        env = build_child_environment(parent)
+
+        for key in ("PYTHONHOME", "UV_INTERNAL__PYTHONHOME", "UV_RUN_RECURSION_DEPTH", "VIRTUAL_ENV"):
+            self.assertNotIn(key, env)
+        self.assertEqual(env["PYTHONPATH"], "C:\\keep-me")
+        self.assertEqual(env["UV_THREADPOOL_SIZE"], "16")
+        self.assertEqual(env["PATH"], "C:\\Tools")
+        self.assertEqual(env["PYTHONUNBUFFERED"], "1")
+        self.assertEqual(env["PYTHONUTF8"], "1")
+
+    def test_plain_terminal_environment_is_preserved(self):
+        parent = {"PATH": "C:\\Tools", "VIRTUAL_ENV": "C:\\intentional-venv"}
+
+        env = build_child_environment(parent)
+
+        self.assertEqual(env["VIRTUAL_ENV"], "C:\\intentional-venv")
+
+    def test_launcher_mode_keeps_launcher_venv_but_drops_uv_internal_state(self):
+        parent = {
+            "PATH": "E:\\multi-run-apps\\.venv\\Scripts;C:\\Tools",
+            "PYTHONHOME": "C:\\uv\\python314",
+            "UV_INTERNAL__PYTHONHOME": "C:\\uv\\python314",
+            "UV_RUN_RECURSION_DEPTH": "1",
+            "VIRTUAL_ENV": "E:\\multi-run-apps\\.venv",
+        }
+
+        env = build_child_environment(parent, mode="launcher")
+
+        self.assertEqual(env["VIRTUAL_ENV"], parent["VIRTUAL_ENV"])
+        self.assertEqual(env["PATH"], parent["PATH"])
+        for key in ("PYTHONHOME", "UV_INTERNAL__PYTHONHOME", "UV_RUN_RECURSION_DEPTH"):
+            self.assertNotIn(key, env)
 
 
 class _FakeProcess:

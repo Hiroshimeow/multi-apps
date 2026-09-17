@@ -82,6 +82,7 @@ class SubprocessSessionManager(BaseSessionManager):
             path=workdir or "",
             command=runner.app_config["command"],
             args=list(runner.app_config.get("args") or []),
+            environment=runner.app_config.get("environment", "app"),
             stdout_path=str(log_dir / f"{run_id}.out.log"),
             stderr_path=str(log_dir / f"{run_id}.err.log"),
             close_timeout=float(runner.app_config.get("close_timeout", 5.0)),

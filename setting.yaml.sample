@@ -7,7 +7,8 @@
 # GLOBAL
 #   log_dir   : thư mục chứa log theo từng run. Path tương đối tính từ file YAML.
 #   session   : "subprocess" (Windows/Linux) hoặc "tmux" (chỉ Linux).
-#   multi_run : giá trị mặc định cho app; từng app vẫn khai báo lại bên dưới.
+#   multi_run   : giá trị mặc định cho app; từng app vẫn khai báo lại bên dưới.
+#   environment : "app" (khuyến nghị) hoặc "launcher"; app có thể override.
 #
 # APP
 #   id            : ID ổn định, duy nhất; dùng cho runtime registry và thư mục log.
@@ -34,6 +35,8 @@
 #   auto_start    : true = tự Start sau khi launcher reconcile runtime hiện có.
 #   multi_run     : true = cho phép nhiều lần Start thủ công cùng app.
 #                   Auto-start vẫn không tạo duplicate run đã được khôi phục.
+#   environment   : optional override "app" hoặc "launcher".
+#                   "app" dùng môi trường riêng của repo; "launcher" dùng env của multi-run.
 #   args_edit     : true = Start thủ công từ tray mở hộp sửa args cho riêng run mới.
 #                   Auto-start, CLI và TUI luôn dùng `args` trong YAML.
 #   close_timeout : số giây graceful Stop trước khi force-close toàn bộ process tree;
@@ -46,6 +49,7 @@ global:
   log_dir: "./logs"
   session: "subprocess"
   multi_run: false
+  environment: "app"
 
 apps:
   - id: "screens-trans-chatbot"

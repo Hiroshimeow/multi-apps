@@ -7,7 +7,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from lib.runtime import process_bootstrap
+from lib.runtime.models import RunRecord
 from lib.runtime.process_client import ProcessClient
+from lib.runtime.process_keeper import ProcessKeeper
 
 
 @unittest.skipUnless(os.name == "nt", "Windows console suppression test")
@@ -54,6 +56,44 @@ class WindowsProcessLaunchFlagTests(unittest.TestCase):
             process.wait.assert_called_once_with(timeout=2.0)
             self.assertNotIn("run-identity-failure", client._keepers)
 
+    def test_managed_bootstrap_command_carries_app_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            runtime_dir = root / ".runtime"
+            record = RunRecord.create(
+                app_id="demo-app",
+                path=str(root),
+                command="uv run main.py",
+                run_id="run-demo",
+                stdout_path=str(root / "out.log"),
+                stderr_path=str(root / "err.log"),
+            )
+            keeper = ProcessKeeper.__new__(ProcessKeeper)
+            keeper.runtime_dir = runtime_dir
+            keeper.run_id = record.run_id
+            keeper.record = record
+            keeper.is_windows = True
+            keeper.job = MagicMock()
+            keeper.ready_file = None
+            keeper.stdout_handle = None
+            keeper.stderr_handle = None
+            process = MagicMock()
+            process.pid = os.getpid()
+
+            with patch(
+                "lib.runtime.process_keeper.subprocess.Popen",
+                return_value=process,
+            ) as popen:
+                keeper._start_managed_process()
+
+            argv = popen.call_args.args[0]
+            self.assertIn("--app-id", argv)
+            self.assertEqual(argv[argv.index("--app-id") + 1], "demo-app")
+            env = popen.call_args.kwargs["env"]
+            self.assertEqual(env["MULTI_RUN_APP_ID"], "demo-app")
+            self.assertEqual(env["MULTI_RUN_RUN_ID"], "run-demo")
+            keeper.job.assign_pid.assert_called_once_with(process.pid)
+
     def test_bootstrap_shell_uses_no_window_flag(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             ready_file = Path(temp_dir) / "ready"
@@ -62,6 +102,7 @@ class WindowsProcessLaunchFlagTests(unittest.TestCase):
             process.wait.return_value = 0
             args = argparse.Namespace(
                 ready_file=str(ready_file),
+                app_id="demo-app",
                 path=temp_dir,
                 command="echo ok",
             )
@@ -76,6 +117,10 @@ class WindowsProcessLaunchFlagTests(unittest.TestCase):
             )
             self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
             self.assertTrue(popen.call_args.kwargs["shell"])
+            self.assertEqual(
+                popen.call_args.kwargs["env"]["MULTI_RUN_APP_ID"],
+                "demo-app",
+            )
 
 
 if __name__ == "__main__":
