@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-HARNESS_PATH = PROJECT_ROOT / "tools" / "idle_first_benchmark.py"
+HARNESS_PATH = PROJECT_ROOT / "benchmarks" / "idle_first_benchmark.py"
 SPEC = importlib.util.spec_from_file_location("idle_first_benchmark", HARNESS_PATH)
 HARNESS = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

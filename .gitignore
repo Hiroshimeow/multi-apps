@@ -43,8 +43,19 @@ Thumbs.db
 *.zip
 *.7z
 
-# Local plugin applications; each plugin may manage its own Git repository
-/tools/
+# Bundled tools: track source, ignore machine-local state and external nested repos.
+/tools/*
+!/tools/copy-content/
+!/tools/copy-content/copy-content.py
+!/tools/copy-content/README.md
+/tools/copy-content/copy-content-config.json
+/tools/copy-content/copy-content.txt
+/tools/copy-content/thesis.txt
+/tools/copy-content/logs/
+/tools/copy-content/__pycache__/
+/tools/advance-clipboard/
+/tools/*_review_artifact/
+/tools/search.txt
 
 # Machine-local planning and active configuration
 /.plan/

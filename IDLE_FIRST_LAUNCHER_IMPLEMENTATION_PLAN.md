@@ -294,7 +294,7 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 Static checks:
 
 ```powershell
-uv run python -m compileall -q multi.py cli.py lib tools\idle_first_benchmark.py
+uv run python -m compileall -q multi.py cli.py lib benchmarks\idle_first_benchmark.py
 git diff --check
 ```
 

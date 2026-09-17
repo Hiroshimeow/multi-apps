@@ -78,24 +78,13 @@ apps:
 
   - id: "copy-content"
     name: "Copy-Content"
-    path: "E:/python_project/multi-run-apps/tools/copy-content/"
-    command: "conda run -n ana11 python copy-content.py"
+    path: "./tools/copy-content"
+    command: "uv run copy-content.py"
     args: []
     enabled: true
     auto_start: true
     multi_run: false
-    args_edit: false
-    close_timeout: 5.0
-    os: "win11"
-
-  - id: "advance-clipboard"
-    name: "Advance-Clipboard"
-    path: "E:/python_project/multi-run-apps/tools/advance-clipboard/"
-    command: "uv run main.py"
-    args: []
-    enabled: true
-    auto_start: true
-    multi_run: false
+    environment: "app"
     args_edit: false
     close_timeout: 5.0
     os: "win11"

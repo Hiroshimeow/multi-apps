@@ -71,6 +71,18 @@ apps:
             self.assertEqual(manager.get_app("Shared")["environment"], "launcher")
             self.assertEqual(manager.get_app("Isolated")["environment"], "app")
 
+    def test_sample_config_bundles_copy_content_with_uv_and_no_args(self):
+        project_root = Path(__file__).resolve().parents[1]
+        manager = ConfigManager(project_root / "setting.yaml.sample")
+        app = manager.get_app_by_id("copy-content")
+
+        self.assertIsNotNone(app)
+        self.assertEqual(app["path"], str((project_root / "tools" / "copy-content").resolve()))
+        self.assertEqual(app["command"], "uv run copy-content.py")
+        self.assertEqual(app["args"], [])
+        self.assertEqual(app["environment"], "app")
+        self.assertTrue((project_root / "tools" / "copy-content" / "copy-content.py").is_file())
+
     def test_name_and_command_are_required(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_file = Path(temp_dir) / "setting.yaml"

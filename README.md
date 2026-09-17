@@ -317,6 +317,10 @@ uv run python cli.py stop "Tên ứng dụng"
 
 Launcher dùng `.runtime/launcher.lock` để ngăn hai launcher hoạt động đồng thời.
 
-## Plugin cục bộ
+## Bundled tools và plugin cục bộ
 
-`tools/` bị Git của `multi-run-apps` bỏ qua. Mỗi plugin trong đó có thể dùng repository Git riêng.
+`tools/copy-content/` là bundled tool của `multi-run-apps` và được version cùng repository. `setting.yaml.sample` dùng path tương đối `./tools/copy-content` cùng `uv run copy-content.py`, nên sau khi clone và copy sample config có thể chạy ngay mà không cần tạo Conda env hoặc sửa args.
+
+Các file state/output của Copy-Content như `copy-content-config.json`, `copy-content.txt`, `logs/` và cache vẫn là local-only và bị Git ignore.
+
+Các tool lớn phát triển độc lập có thể nằm dưới `tools/` nhưng không thuộc repository này. Ví dụ `tools/advance-clipboard/` tiếp tục là nested repository riêng và bị `multi-run-apps` ignore.
